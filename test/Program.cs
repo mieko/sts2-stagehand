@@ -28,4 +28,5 @@ if (!Check("Known identical copies", [strike, copy], [copy, strike], new() { [st
 if (!Check("Mixed known/new copies", [strike, copy, defend], [defend, copy, strike], new() { [strike] = 12 })) return 1;
 Console.WriteLine("Public unordered-card order/reference independence: 3 cases passed");
 return 0;
+
 record Card(string Name, int Copy);

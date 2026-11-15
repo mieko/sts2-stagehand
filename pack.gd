@@ -17,7 +17,10 @@ func _init() -> void:
 				if result != OK:
 					break
 	if result == OK:
-		result = packer.add_file("res://stagehand_sts2/sts2.gd", get_script().resource_path.get_base_dir().path_join("sts2.gd"))
+		result = packer.add_file(
+			"res://stagehand_sts2/sts2.gd",
+			get_script().resource_path.get_base_dir().path_join("sts2.gd"),
+		)
 	if result == OK:
 		result = packer.flush()
 	print("Stagehand resource pack: ", error_string(result))

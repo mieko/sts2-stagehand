@@ -10,11 +10,17 @@ var _bridge: Node
 var _handle := ""
 
 
-func configure(bridge: Node) -> void:
+func configure(bridge: Node) -> String:
 	_bridge = bridge
-	_handle = bridge.register_object(self, "Sts2", "Sts2", {
-		"request": request, "state": state, "inspect": inspect_state, "select_card": select_card,
-	}, observe, ["changed"])
+	_handle = bridge.register_object(
+		self,
+		"Sts2",
+		"Sts2",
+		{ "request": request, "state": state, "inspect": inspect_state, "select_card": select_card },
+		observe,
+		["changed"],
+	)
+	return _handle
 
 
 func observe() -> Variant:
@@ -48,4 +54,4 @@ func _process(_delta: float) -> void:
 	if frame_callback.is_valid() and not _handle.is_empty():
 		var revision: String = frame_callback.call()
 		if not revision.is_empty():
-			_bridge.publish(_handle, "changed", {"revision": revision})
+			_bridge.publish(_handle, "changed", { "revision": revision })

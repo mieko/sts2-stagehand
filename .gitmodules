@@ -1,0 +1,3 @@
+[submodule "stagehand"]
+	path = stagehand
+	url = https://github.com/mieko/stagehand.git

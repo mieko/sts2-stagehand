@@ -4,12 +4,13 @@
   "type": "module",
   "dependencies": {
     "ws": "8.23.0",
-    "godot-stagehand": "file:../stagehand"
+    "godot-stagehand": "file:./stagehand"
   },
   "exports": "./sts2.mjs",
   "scripts": {
-    "test": "node --test sts2.test.mjs",
+    "test": "node --test test/*.test.mjs && npm run test:launcher",
     "test:host": "dotnet run --project test/PublicCardList.test.csproj",
-    "test:selection": "dotnet run --project test/SelectionNative.test.csproj"
+    "test:selection": "dotnet run --project test/SelectionNative.test.csproj",
+    "test:launcher": "python3 -m unittest discover -s test -p '*_test.py'"
   }
 }

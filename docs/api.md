@@ -45,6 +45,30 @@ generic `game` registration does not identify an StS2 wrapper.
   Panache, potion X costs, player Plating, Death March, self-Doom, Reaper Form and
   Helmet's payment threshold. They are explanations, not strategy or
   a replacement rules engine; the binding targets the game version in the README.
+- Cards also expose `values`, keyed by the native numeric variable name. Each
+  entry retains `nativeType`, `base`, `enchanted` and `preview`; known variable
+  types include units such as damage, block, cards, energy, stars and power stacks.
+  An unknown unit is null. These are native display parameters, not a complete
+  effect list: a `RepeatVar` is repetitions unless the card's native operation
+  establishes that it counts hits. Celestial Might therefore exposes `Damage`
+  and `Repeat` in hits. Crush Under exposes `Damage` and `StrengthLoss`, with a
+  small native-backed `meaning` identifying temporary loss on all enemies until
+  their side-turn ends. Numeric amounts and upgrade alternatives come from the
+  game, not parsed prose or a hand-maintained card catalog. Native text is retained.
+  Boolean/string template variables are outside this numeric projection.
+- `valueContext` labels numeric/descriptive previews separately from payment costs.
+  `source: "cached_native_model"` means inspection reads the existing model values
+  without recalculating or changing its preview. `descriptionPile` is the pile
+  passed to the description formatter; `modelPile` is the actual card pile (null
+  for an unplaced offer/preview), and `upgradePreview` is the native Deck/Combat/None
+  upgrade context. `globalHooksEligible` reflects native eligibility for combat
+  hand/play or combat-upgrade modifiers, not a record of which hooks last ran.
+  Native UI can use local/enchantment-only previews in a selection and combat
+  modifiers in hand, so displayed amounts can differ between those views. The
+  base/enchanted/preview fields preserve that distinction. The cached target is
+  not recorded; `target: "not_recorded"` and `prospectiveDamage: false` explicitly
+  avoid promising damage to a selected enemy or HP loss after block. No target
+  simulation or source-model preview refresh is performed by an inspection.
 - `play(cardOrExactName, enemyOrExactName?)` accepts stable snapshot objects. Names
   work when unambiguous; identical card copies are interchangeable. Cards with
   different costs/text/modifiers require a specific object. Enemies with identical
@@ -128,13 +152,13 @@ generic `game` registration does not identify an StS2 wrapper.
   contents are never serialized. The final divination waits for the native loot
   decision, or the next decision when no loot remains. Resolving loot then leaves
   the finished sphere through its enabled native Proceed. Rewards are never
-  automatically claimed. Big divination and loot were live-qualified; the refined
-  settlement is regression-qualified. Bundle choices still need live coverage.
+  automatically claimed. Rare bundle variants remain a compatibility limitation;
+  inspect the actual offered controls when one appears.
 - `finishResults()` explicitly advances the actual result controls after they become
   ready, returning `runResult`, preserved outcome text and the next decision. Native
   result data includes `win`, `score`, `stats` and animation phase; HP zero during
   the ending is not treated as a loss. Structured result fields follow native
-  summary calculations and have been exercised through complete wins.
+  summary calculations.
   Host phases are `outcome`, `summary_animation`, `earned_epochs` (the enabled
   Timeline/Unlock step), `summary` (no earned epochs), `leaderboard`, and
   `transition`. They follow native control/animation state, not a button label or
@@ -285,6 +309,11 @@ still accepted/running. Use `waitFor` to observe completion without sending anot
 action. Every successful mutating helper includes a semantic `decision` from its
 finished snapshot; callers do not need another poll to learn the next decision.
 If a batch fails after earlier items, do not replay the whole list.
+If the operation succeeds but a subsequent forced UI transition fails, the error's
+`outcome` retains that applied operation and its batch `results`, the latest known
+state, and completed `automaticSteps`. `automaticOutcome` identifies the failing
+or unconfirmed presentation step. A failed presentation transition does not undo
+the action or make it safe to submit it again.
 
 
 ## Inspecting versus normalizing
@@ -373,6 +402,13 @@ local-player intent previews; hidden/unknown intents make the total unknown.
 It is not predicted HP loss: block, conditional effects, later actions and target
 changes can alter the outcome. Descriptions retain targeting/special-effect context.
 
+During Surrounded, `player.facing` reports the native Left/Right power state.
+Enemies with directional Back Attack powers expose `relativePosition` with native
+`side` and `behind`, derived from those powers and the player's facing rather
+than screen coordinates. A missing/ambiguous side leaves `behind` null; outside
+Surrounded the relative position and player facing are null. This describes the
+current public orientation, not a free facing action or future damage prediction.
+
 Deck-changing UI helpers (`choose`, `pickCard`, `selectCards`,
 `confirmSelection`, `upgradeCard`, `removeCard`) snapshot the out-of-combat deck
 before submission and after the settled result. `deckChanges` reports added,
@@ -405,16 +441,21 @@ same human/API-driven game independently.
 
 ```js
 var frame = await observer.spectate({timeoutMs: 20000});
-nodeRepl.write(frame.view);
+if (frame) nodeRepl.write(frame.view);
 // Later, while a human or another client drives:
-frame = await observer.spectate({after: frame, timeoutMs: 20000});
-nodeRepl.write(frame.view);
+var next = await observer.spectate({after: frame ?? undefined, timeoutMs: 20000});
+if (next) {
+  frame = next;
+  nodeRepl.write(frame.view);
+} // null means the bounded wait was idle; retain the previous frame.
 ```
 
 An ordinary Node script can use the same loop, replacing `nodeRepl.write` with
 its own output. Keep a tool invocation's execution timeout longer than `timeoutMs`.
-Optional `signal` is an AbortSignal. Timeout, abort, disconnect and endpoint
-removal release the wait's listeners/subscription; they do not stop game actions
+Optional `signal` is an AbortSignal. Expected idle timeout returns null without
+advancing the continuation or consuming a position. Abort, disconnect, endpoint
+removal and RPC failures still reject. All release the wait's listeners/subscription;
+they do not stop game actions
 or poison the local action queue. A read already sent to the host may still
 complete after cancellation. Rich passive inspection remains `state()`, `deck()`
 and `piles()`; the extra read is not an atomic capture of an earlier frame.
@@ -447,6 +488,4 @@ popup. It waits for the real game-over decision; then use `finishResults()` and
 handle any native unlocks explicitly. It does not fabricate progress or force an
 unlock. This is destructive to that run: use only when actually choosing to abandon.
 Saved runs at the main menu can still be managed through their native UI; this
-helper requires an in-progress run. The native abandon/results/earned-unlock flow
-has been exercised with Regent and Necrobinder; this does not qualify their combat
-systems or imply that abandoning always earns an unlock.
+helper requires an in-progress run. Abandoning does not guarantee an earned unlock.

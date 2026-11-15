@@ -1,100 +1,60 @@
 import { createRequire } from 'node:module';
 import { cardVariant, deckChanges } from './cards.mjs';
-import { present, incoming } from './present.mjs';
+import { present } from './present.mjs';
+import { isShopEntrance, decisionKind, choiceView, decisionView } from './decision.mjs';
 import { isSettledObservation, observationKey, observationBoundary } from './spectator.mjs';
 export { present } from './present.mjs';
 
-const { connect, GodotValue } = await import(createRequire(import.meta.url).resolve('godot-stagehand'));
+const { connect, GodotValue } = await import(
+  createRequire(import.meta.url).resolve('godot-stagehand')
+);
 
-const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const fingerprint = state => JSON.stringify({ screen: state.screen, room: state.room,
-  choices: state.choices.map(({ ref, label, enabled, selected, detail }) => ({ ref, label, enabled, selected, detail })).sort((a, b) => a.ref.localeCompare(b.ref)),
-  result: state.result, selection: state.selection, preview: state.preview, player: state.player, combat: state.combat, event: state.event, dialogueLine: state.dialogue?.line });
-
-function isShopEntrance(state) {
-  return ['NMerchantRoom', 'NEventRoom'].includes(state.screen) && Boolean(state.shop);
-}
-
-function decisionKind(state) {
-  const screen = state.screen;
-  if (screen === 'NTimelineScreen') return 'timeline';
-  if (screen === 'NTimelineTutorial' || screen.includes('Ftue')) return 'tutorial';
-  if (screen === 'NEpochInspectScreen') return 'epoch';
-  if (screen.startsWith('NUnlock')) return 'unlock';
-  if (screen === 'CardPreview') return 'card_preview';
-  if (screen.includes('Bundle')) return 'bundle_selection';
-  if (screen.includes('RelicSelection')) return 'relic_selection';
-  if (screen.includes('CrystalSphere')) return 'crystal_sphere';
-  if (screen === 'NMapScreen') return 'map';
-  if (screen === 'NRewardsScreen') return 'rewards';
-  if (screen === 'NCardRewardSelectionScreen') return 'card_reward';
-  if (screen === 'HandSelection' || /Card.*Select|Select.*Card/.test(screen)
-    || screen.includes('Select') && state.choices.some(c => c.type.includes('CardHolder'))) return 'card_selection';
-  if (isShopEntrance(state)) return 'shop_entrance';
-  if (screen.includes('Merchant')) return screen.includes('Inventory') ? 'shop' : 'shop_entrance';
-  if (screen.includes('RestSite')) return 'rest';
-  if (screen.includes('Treasure')) return 'treasure';
-  if (screen.includes('Event')) return 'event';
-  if (screen.includes('GameOver')) return 'game_over';
-  if (state.combat) return 'combat';
-  return state.player ? 'choice' : 'menu';
-}
-
-function choiceView({ rect, ...choice }) {
-  let kind = { NMerchantCard: 'buy_card', NMerchantRelic: 'buy_relic', NMerchantPotion: 'buy_potion',
-    NMerchantCardRemoval: 'remove_card', NEventOptionButton: 'event_option', NRestSiteButton: 'rest_option',
-    NRewardButton: 'reward', NGridCardHolder: 'select_card', NHandCardHolder: 'select_card',
-    NSelectedHandCardHolder: 'deselect_card', NCardBundle: 'select_bundle',
-    NUnlockConfirmButton: 'confirm_unlock',
-    NRelicBasicHolder: 'select_relic', NTreasureRoomRelicHolder: 'take_relic',
-    NCrystalSphereCell: 'divine_cell' }[choice.type] ?? 'ui';
-  if (choice.type === 'NRewardButton') kind = { RelicReward: 'relic_reward', PotionReward: 'potion_reward',
-    GoldReward: 'gold_reward', CardReward: 'card_reward', SpecialCardReward: 'special_card_reward' }[choice.detail?.category] ?? 'reward';
-  if (choice.type === 'NEpochSlot') kind = { Obtained: 'reveal_epoch', Complete: 'inspect_epoch',
-    NotObtained: 'locked_epoch' }[choice.detail?.state] ?? 'epoch';
-  const model = choice.detail?.item ?? choice.detail?.relic ?? choice.detail?.potion ?? choice.detail;
-  return { ...choice, kind, price: choice.detail?.price, description: model?.description,
-    effects: model?.effects, cost: model?.cost, starCost: model?.starCost,
-    target: model?.target, upgraded: model?.upgraded, enchantment: model?.enchantment,
-    affliction: model?.affliction, replay: model?.replay };
-}
-
-function decisionView(state) {
-  const kind = decisionKind(state);
-  const choices = state.choices.map(choiceView);
-  const offers = choices.filter(c => ['take_relic', 'select_relic', 'relic_reward'].includes(c.kind));
-  return { kind, screen: state.screen, room: state.room, act: state.act, floor: state.floor,
-    totalFloor: state.totalFloor, ascension: state.ascension, preview: state.preview,
-    ready: state.ready, player: state.player, combat: state.combat ? { ...state.combat, incoming: incoming(state.combat) } : state.combat, pending: state.pending,
-    event: state.event, dialogue: state.dialogue, selection: state.selection, shop: state.shop, result: state.result,
-    navigation: state.navigation, epoch: state.epoch, unlock: state.unlock,
-    timeline: state.timeline ? { ...state.timeline, epochs: choices.filter(c => c.type === 'NEpochSlot') } : undefined,
-    crystalSphere: state.crystalSphere ? { ...state.crystalSphere,
-      cells: choices.filter(c => c.type === 'NCrystalSphereCell'),
-      tools: choices.filter(c => c.type === 'NDivinationButton') } : undefined,
-    choices: kind === 'treasure' ? choices.filter(c => c.type !== 'NTreasureButton')
-      : kind === 'map' ? choices.filter(c => c.enabled && c.type.includes('MapPoint')) : choices,
-    offers: offers.length || kind === 'treasure' ? offers : undefined,
-    canDecline: kind === 'treasure' ? choices.some(c => c.enabled && c.type === 'NProceedButton') : undefined,
-    text: kind === 'treasure' ? [] : state.text,
-    map: state.map, nextRooms: state.map?.filter(p => p.state === 'Travelable') };
-}
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+class DecisionTimeoutError extends Error {}
+const fingerprint = (state) =>
+  JSON.stringify({
+    screen: state.screen,
+    room: state.room,
+    choices: state.choices
+      .map(({ ref, label, enabled, selected, detail }) => ({
+        ref,
+        label,
+        enabled,
+        selected,
+        detail,
+      }))
+      .sort((a, b) => a.ref.localeCompare(b.ref)),
+    result: state.result,
+    selection: state.selection,
+    preview: state.preview,
+    player: state.player,
+    combat: state.combat,
+    event: state.event,
+    dialogueLine: state.dialogue?.line,
+  });
 
 function cardByName(cards, name) {
-  const matches = cards.filter(c => (c.name ?? c.label).toLowerCase() === name.toLowerCase());
+  const matches = cards.filter((c) => (c.name ?? c.label).toLowerCase() === name.toLowerCase());
   const variants = new Set(matches.map(cardVariant));
-  if (!matches.length || variants.size > 1) throw new Error('Card name is missing or has different variants; pass a specific card object');
+  if (!matches.length || variants.size > 1)
+    throw new Error('Card name is missing or has different variants; pass a specific card object');
+
   return matches[0];
 }
 
 function creatureTarget(state, target) {
   if (typeof target !== 'string') {
     if (target && !target.ref) throw new TypeError('Pass a creature object or exact creature name');
+
     return target;
   }
-  const creatures = [...state.combat?.enemies ?? [], ...state.combat?.allies ?? []]
-    .filter(e => e.ref === target || e.name.toLowerCase() === target.toLowerCase());
-  if (creatures.length !== 1) throw new Error('Target is missing or ambiguous; use a creature object');
+
+  const creatures = [...(state.combat?.enemies ?? []), ...(state.combat?.allies ?? [])].filter(
+    (e) => e.ref === target || e.name.toLowerCase() === target.toLowerCase(),
+  );
+  if (creatures.length !== 1)
+    throw new Error('Target is missing or ambiguous; use a creature object');
+
   return creatures[0];
 }
 
@@ -120,13 +80,17 @@ export const sts2Wrappers = {
 };
 
 export async function connectSts2(url, options = {}) {
-  const client = options.client ?? await connect(url, {
-    ...options, wrappers: { ...sts2Wrappers, ...options.wrappers },
-  });
+  const client =
+    options.client ??
+    (await connect(url, {
+      ...options,
+      wrappers: { ...sts2Wrappers, ...options.wrappers },
+    }));
   client.wrappers.Sts2 ??= sts2Wrappers.Sts2;
   try {
     const game = await client.findObject('Sts2');
     if (!game) throw new Error('The adapter-local Sts2 host is not loaded');
+
     if (!(game instanceof Sts2)) {
       throw new Error('The host must register the Sts2 type; reload the matching mod/client');
     }
@@ -148,36 +112,59 @@ export class Sts2 {
   #spectatorLast;
   #spectatorWaiting = false;
   #spectatorPosition = 0;
-  constructor(client, endpoint) { this.client = client; this.endpoint = endpoint; }
-  async state() { return (await this.endpoint.observe()).value; }
-  async deck({ upgrades = false } = {}) { return (await this.endpoint.invoke('inspect', { kind: 'deck', upgrades })).cards; }
+  constructor(client, endpoint) {
+    this.client = client;
+    this.endpoint = endpoint;
+  }
+  async state() {
+    return (await this.endpoint.observe()).value;
+  }
+  async deck({ upgrades = false } = {}) {
+    return (await this.endpoint.invoke('inspect', { kind: 'deck', upgrades })).cards;
+  }
   async inspectCard(card, { upgrades = false } = {}) {
     const model = card?.detail?.item ?? card?.detail ?? card?.model ?? card;
-    const ref = typeof card === 'string' ? card : card?.cardRef ?? model?.ref;
+    const ref = typeof card === 'string' ? card : (card?.cardRef ?? model?.ref);
     if (typeof ref !== 'string' || !ref)
       throw new TypeError('Pass an observed card or offer with a card reference');
+
     return this.endpoint.invoke('inspect', { kind: 'card', card: ref, upgrades });
   }
-  async piles() { return this.endpoint.invoke('inspect', { kind: 'piles' }); }
+  async piles() {
+    return this.endpoint.invoke('inspect', { kind: 'piles' });
+  }
   async decision({ wait = false, ...options } = {}) {
-    const state = wait ? await this.waitFor(s => s.ready, options) : await this.state();
+    const state = wait ? await this.waitFor((s) => s.ready, options) : await this.state();
     if (!this.#queueError && state.ready && this.#forcedStep(state))
-      return (await this.#enqueue(async () => ({ status: 'ready', state: await this.state() }))).decision;
+      return (await this.#enqueue(async () => ({ status: 'ready', state: await this.state() })))
+        .decision;
+
     return decisionView(state);
   }
 
-  present(value, options) { return present(value, options); }
-  async brief(options) { return present(await this.decision(options)); }
+  present(value, options) {
+    return present(value, options);
+  }
+  async brief(options) {
+    return present(await this.decision(options));
+  }
   setSpectatorPacing(milliseconds = 0) {
     if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 5000)
       throw new RangeError('Spectator pacing must be in 0..5000 milliseconds');
+
     this.#spectatorDelayMs = milliseconds;
   }
-  async #pace() { if (this.#spectatorDelayMs) await pause(this.#spectatorDelayMs); }
+  async #pace() {
+    if (this.#spectatorDelayMs) await pause(this.#spectatorDelayMs);
+  }
 
   #enqueue(work, { trackDeck = false } = {}) {
     const result = this.#tail.then(async () => {
-      if (this.#queueError) throw new Error('Action queue stopped: ' + this.#queueError.message, { cause: this.#queueError });
+      if (this.#queueError)
+        throw new Error('Action queue stopped: ' + this.#queueError.message, {
+          cause: this.#queueError,
+        });
+
       try {
         const beforeState = trackDeck ? await this.state() : null;
         const beforeDeck = beforeState?.player && !beforeState.combat ? await this.deck() : null;
@@ -185,18 +172,38 @@ export class Sts2 {
         if (beforeDeck && outcome.state?.combat) this.#deckBeforeCombat ??= beforeDeck;
         const baseline = this.#deckBeforeCombat ?? beforeDeck;
         if (baseline && outcome.state?.player && !outcome.state.combat) {
-          try { outcome.deckChanges = deckChanges(baseline, await this.deck()); this.#deckBeforeCombat = undefined; }
-          catch (error) { error.outcome = outcome; throw error; }
+          try {
+            outcome.deckChanges = deckChanges(baseline, await this.deck());
+            this.#deckBeforeCombat = undefined;
+          } catch (error) {
+            error.outcome = outcome;
+            throw error;
+          }
         }
         if (outcome.state && !outcome.state.player) this.#deckBeforeCombat = undefined;
         if (['unconfirmed', 'failed', 'cancelled'].includes(outcome.status)) {
-          const error = new Error('Action did not finish successfully: ' + (outcome.warning ?? outcome.error ?? outcome.status));
+          const error = new Error(
+            'Action did not finish successfully: ' +
+              (outcome.warning ?? outcome.error ?? outcome.status),
+          );
           error.outcome = outcome;
           throw error;
         }
-        return { ...outcome, decision: outcome.state ? { ...decisionView(outcome.state),
-          automaticSteps: outcome.automaticSteps, outcomeText: outcome.outcomeText } : undefined };
-      } catch (error) { this.#queueError = error; throw error; }
+
+        return {
+          ...outcome,
+          decision: outcome.state
+            ? {
+                ...decisionView(outcome.state),
+                automaticSteps: outcome.automaticSteps,
+                outcomeText: outcome.outcomeText,
+              }
+            : undefined,
+        };
+      } catch (error) {
+        this.#queueError = error;
+        throw error;
+      }
     });
     this.#tail = result.catch(() => {});
     return result;
@@ -205,411 +212,704 @@ export class Sts2 {
   async resumeQueue() {
     await this.#tail;
     const state = await this.state();
-    if (['accepted', 'running'].includes(state.pending?.status)) throw new Error('The game action is still running; observe or wait for its outcome');
+    if (['accepted', 'running'].includes(state.pending?.status))
+      throw new Error('The game action is still running; observe or wait for its outcome');
+
     this.#queueError = undefined;
     return state;
   }
 
-  travel(point, options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    const current = state.map?.find(p => p.ref === point?.ref && p.state === 'Travelable');
-    if (!current) throw new Error('Pass a currently travelable room from state.map or decision.nextRooms');
-    if (!state.ready) throw new Error('The map is not ready for travel');
-    await this.#pace();
-    await this.client.object(state.mapControl).call('OnMapPointSelectedLocally', this.client.object(current.ref));
-    const arrived = await this.waitFor(s => s.ready && s.screen !== 'NMapScreen'
-      && (s.act !== state.act || s.floor !== state.floor), options);
-    return { status: 'completed', state: arrived };
-  }); }
+  travel(point, options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      const current = state.map?.find((p) => p.ref === point?.ref && p.state === 'Travelable');
+      if (!current)
+        throw new Error('Pass a currently travelable room from state.map or decision.nextRooms');
+
+      if (!state.ready) throw new Error('The map is not ready for travel');
+
+      await this.#pace();
+      await this.client
+        .object(state.mapControl)
+        .call('OnMapPointSelectedLocally', this.client.object(current.ref));
+      const arrived = await this.waitFor(
+        (s) =>
+          s.ready && s.screen !== 'NMapScreen' && (s.act !== state.act || s.floor !== state.floor),
+        options,
+      );
+      return { status: 'completed', state: arrived };
+    });
+  }
 
   #forcedStep(state) {
-    const enabled = state.choices.filter(c => c.enabled);
-    const shopkeeperDecision = state.player?.potions?.some(p => p.usable && p.targets?.some(t => t.kind === 'shopkeeper'));
-    if (isShopEntrance(state) && state.shop.canBrowse && !state.shop.open
-      && this.#browsedShop !== state.shop.control && !shopkeeperDecision)
+    const enabled = state.choices.filter((c) => c.enabled);
+    const shopkeeperDecision = state.player?.potions?.some(
+      (p) => p.usable && p.targets?.some((t) => t.kind === 'shopkeeper'),
+    );
+    if (
+      isShopEntrance(state) &&
+      state.shop.canBrowse &&
+      !state.shop.open &&
+      this.#browsedShop !== state.shop.control &&
+      !shopkeeperDecision
+    )
       return { kind: 'browse_shop', controller: state.shop.control };
+
     if (state.screen === 'NTreasureRoom') {
-      const chest = enabled.find(c => c.type === 'NTreasureButton');
-      const proceed = enabled.find(c => c.type === 'NProceedButton');
+      const chest = enabled.find((c) => c.type === 'NTreasureButton');
+      const proceed = enabled.find((c) => c.type === 'NProceedButton');
       if (chest && !proceed) return { choice: chest, kind: 'open_chest' };
-      if (proceed && !enabled.some(c => c.type === 'NTreasureRoomRelicHolder') && proceed.isSkip === false)
+
+      if (
+        proceed &&
+        !enabled.some((c) => c.type === 'NTreasureRoomRelicHolder') &&
+        proceed.isSkip === false
+      )
         return { choice: proceed, kind: 'leave_resolved_treasure' };
     }
-    const merchant = enabled.find(c => c.type === 'NMerchantButton');
-    if (merchant && !state.shop && ['NMerchantRoom', 'NEventRoom'].includes(state.screen) && !shopkeeperDecision)
+    const merchant = enabled.find((c) => c.type === 'NMerchantButton');
+    if (
+      merchant &&
+      !state.shop &&
+      ['NMerchantRoom', 'NEventRoom'].includes(state.screen) &&
+      !shopkeeperDecision
+    )
       return { choice: merchant, kind: 'browse_shop' };
+
     if (state.screen === 'NCrystalSphereScreen' && state.crystalSphere?.finished) {
-      const proceed = enabled.find(c => c.type === 'NProceedButton');
+      const proceed = enabled.find((c) => c.type === 'NProceedButton');
       if (proceed) return { choice: proceed, kind: 'leave_finished_sphere' };
     }
     if (state.screen === 'NRewardsScreen' && state.rewards?.complete) {
-      const proceed = enabled.find(c => c.type === 'NProceedButton' && c.isSkip === false);
+      const proceed = enabled.find((c) => c.type === 'NProceedButton' && c.isSkip === false);
       if (proceed) return { choice: proceed, kind: 'leave_empty_rewards' };
     }
-    if (state.screen === 'NRewardsScreen' && state.rewards?.remaining > 0 && state.rewards.unresolved === 0) {
-      const proceed = enabled.find(c => c.type === 'NProceedButton');
+    if (
+      state.screen === 'NRewardsScreen' &&
+      state.rewards?.remaining > 0 &&
+      state.rewards.unresolved === 0
+    ) {
+      const proceed = enabled.find((c) => c.type === 'NProceedButton');
       if (proceed) return { choice: proceed, kind: 'leave_resolved_rewards' };
     }
-    if (state.screen === 'NRestSiteRoom' && !enabled.some(c => c.type === 'NRestSiteButton')) {
-      const proceed = enabled.find(c => c.type === 'NProceedButton');
+    if (state.screen === 'NRestSiteRoom' && !enabled.some((c) => c.type === 'NRestSiteButton')) {
+      const proceed = enabled.find((c) => c.type === 'NProceedButton');
       if (proceed) return { choice: proceed, kind: 'leave_resolved_rest' };
     }
     if (state.screen === 'NEventRoom' && state.event?.finished && !state.shop) {
-      const proceed = enabled.find(c => c.type === 'NEventOptionButton' && c.detail?.isProceed);
+      const proceed = enabled.find((c) => c.type === 'NEventOptionButton' && c.detail?.isProceed);
       if (proceed) return { choice: proceed, kind: 'leave_finished_event' };
     }
-    if (state.dialogue?.canAdvance && !enabled.some(c => c.type === 'NEventOptionButton')) {
-      const dialogue = enabled.find(c => c.ref === state.dialogue.ref);
+    if (state.dialogue?.canAdvance && !enabled.some((c) => c.type === 'NEventOptionButton')) {
+      const dialogue = enabled.find((c) => c.ref === state.dialogue.ref);
       if (dialogue) return { choice: dialogue, kind: 'advance_dialogue' };
     }
   }
 
   async #settle(outcome) {
-    if (!outcome.state || ['unconfirmed', 'failed', 'cancelled'].includes(outcome.status)) return outcome;
+    if (!outcome.state || ['unconfirmed', 'failed', 'cancelled'].includes(outcome.status))
+      return outcome;
+
     let state = outcome.state;
-    const steps = [...outcome.automaticSteps ?? []], text = new Set(outcome.outcomeText ?? []);
-    for (let count = 0; count < 32; count++) {
-      if (isShopEntrance(state) && state.shop.open) {
-        state = await this.waitFor(s => s.ready && decisionKind(s) === 'shop');
-      }
-      if (state.screen === 'NRewardsScreen' && state.rewards?.remaining === 0 && !state.rewards.complete) {
-        state = await this.waitFor(s => s.ready && (s.screen !== 'NRewardsScreen'
-          || s.rewards?.complete || s.rewards?.remaining > 0));
-      }
-      if (state.screen === 'NEventRoom' && state.event?.finished && !state.shop) {
-        if (state.event.description) text.add(state.event.description);
-        if (!state.choices.some(c => c.enabled && c.detail?.isProceed)) {
-          state = await this.waitFor(s => s.ready && (s.screen !== 'NEventRoom'
-            || s.choices.some(c => c.enabled && c.detail?.isProceed)));
+    const steps = [...(outcome.automaticSteps ?? [])],
+      text = new Set(outcome.outcomeText ?? []);
+    let automaticOutcome;
+    const progress = () => ({
+      ...outcome,
+      state,
+      automaticSteps: [...steps],
+      outcomeText: [...text],
+      ...(automaticOutcome && { automaticOutcome }),
+    });
+    try {
+      for (let count = 0; count < 32; count++) {
+        if (isShopEntrance(state) && state.shop.open) {
+          state = await this.waitFor((s) => s.ready && decisionKind(s) === 'shop');
         }
+        if (
+          state.screen === 'NRewardsScreen' &&
+          state.rewards?.remaining === 0 &&
+          !state.rewards.complete
+        ) {
+          state = await this.waitFor(
+            (s) =>
+              s.ready &&
+              (s.screen !== 'NRewardsScreen' || s.rewards?.complete || s.rewards?.remaining > 0),
+          );
+        }
+        if (state.screen === 'NEventRoom' && state.event?.finished && !state.shop) {
+          if (state.event.description) text.add(state.event.description);
+          if (!state.choices.some((c) => c.enabled && c.detail?.isProceed)) {
+            state = await this.waitFor(
+              (s) =>
+                s.ready &&
+                (s.screen !== 'NEventRoom' ||
+                  s.choices.some((c) => c.enabled && c.detail?.isProceed)),
+            );
+          }
+        }
+        if (
+          state.screen === 'NTreasureRoom' &&
+          !state.choices.some((c) => c.type === 'NTreasureButton' && c.enabled) &&
+          !state.choices.some((c) => c.type === 'NProceedButton' && c.enabled)
+        ) {
+          state = await this.waitFor(
+            (s) =>
+              s.ready &&
+              (s.screen !== 'NTreasureRoom' ||
+                s.choices.some((c) => c.type === 'NProceedButton' && c.enabled)),
+          );
+        }
+        const step = this.#forcedStep(state);
+        if (!step) return progress();
+
+        if (state.dialogue?.text) for (const line of state.dialogue.text) text.add(line);
+        let next;
+        automaticOutcome = { kind: step.kind, status: 'attempting' };
+        try {
+          if (step.controller) {
+            this.#browsedShop = step.controller;
+            await this.#pace();
+            await this.client.object(step.controller).call('OpenInventory');
+            next = {
+              status: 'observed_change',
+              state: await this.waitFor((s) => s.ready && decisionKind(s) === 'shop'),
+            };
+          } else next = await this.#choose(step.choice);
+        } catch (error) {
+          // A game-owned transition may already have removed this forced UI step.
+          // This error is raised before activation, so no command is repeated.
+          if (error.code !== 'STALE_CHOICE') throw error;
+
+          state = error.state;
+          automaticOutcome = undefined;
+          continue;
+        }
+        automaticOutcome = { ...next, kind: step.kind };
+        state = next.state ?? state;
+        if (next.status !== 'observed_change')
+          return { ...progress(), status: next.status, warning: next.warning, error: next.error };
+
+        steps.push(step.kind);
+        automaticOutcome = undefined;
       }
-      if (state.screen === 'NTreasureRoom' && !state.choices.some(c => c.type === 'NTreasureButton' && c.enabled)
-        && !state.choices.some(c => c.type === 'NProceedButton' && c.enabled)) {
-        state = await this.waitFor(s => s.ready && (s.screen !== 'NTreasureRoom'
-          || s.choices.some(c => c.type === 'NProceedButton' && c.enabled)));
-      }
-      const step = this.#forcedStep(state);
-      if (!step) return { ...outcome, state, automaticSteps: steps, outcomeText: [...text] };
-      if (state.dialogue?.text) for (const line of state.dialogue.text) text.add(line);
-      let next;
-      try {
-        if (step.controller) {
-          this.#browsedShop = step.controller;
-          await this.#pace();
-          await this.client.object(step.controller).call('OpenInventory');
-          next = { status: 'observed_change', state: await this.waitFor(s => s.ready && decisionKind(s) === 'shop') };
-        } else next = await this.#choose(step.choice);
-      }
-      catch (error) {
-        // A game-owned transition may already have removed this forced UI step.
-        // This error is raised before activation, so no command is repeated.
-        if (error.code !== 'STALE_CHOICE') throw error;
-        state = error.state; continue;
-      }
-      steps.push(step.kind);
-      if (next.status !== 'observed_change') return { ...next, automaticSteps: steps, outcomeText: [...text] };
-      state = next.state;
+      throw new Error('Automatic UI progression did not reach a decision; inspect state()');
+    } catch (error) {
+      const nested = error.outcome;
+      error.outcome = progress();
+      if (nested) error.outcome.automaticOutcome = { ...automaticOutcome, outcome: nested };
+      throw error;
     }
-    throw new Error('Automatic UI progression did not reach a decision; inspect state()');
   }
 
-  takeRelic(relic, options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    const matches = state.choices.filter(c => c.enabled && (['NRelicBasicHolder', 'NTreasureRoomRelicHolder'].includes(c.type)
-      || c.type === 'NRewardButton' && c.detail?.category === 'RelicReward')
-      && (typeof relic === 'string' ? c.label.toLowerCase() === relic.toLowerCase() : c.ref === relic?.ref));
-    if (matches.length !== 1) throw new Error('Relic offer is missing or ambiguous; use an offer object');
-    return this.#choose(matches[0], options);
-  }); }
+  takeRelic(relic, options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      const matches = state.choices.filter(
+        (c) =>
+          c.enabled &&
+          (['NRelicBasicHolder', 'NTreasureRoomRelicHolder'].includes(c.type) ||
+            (c.type === 'NRewardButton' && c.detail?.category === 'RelicReward')) &&
+          (typeof relic === 'string'
+            ? c.label.toLowerCase() === relic.toLowerCase()
+            : c.ref === relic?.ref),
+      );
+      if (matches.length !== 1)
+        throw new Error('Relic offer is missing or ambiguous; use an offer object');
 
-  declineRelic(options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    if (state.screen === 'NTreasureRoom') return this.#chooseType('NProceedButton', options);
-    if (decisionKind(state) !== 'relic_selection') throw new Error('No relic offer is active');
-    const skip = state.choices.find(c => c.enabled && c.label === 'Skip');
-    if (!skip) throw new Error('The game does not offer a decline action here');
-    return this.#choose(skip, options);
-  }); }
+      return this.#choose(matches[0], options);
+    });
+  }
 
-  pickCard(card, options) { return this.#enqueue(() => this.#pickCard(card, options), { trackDeck: true }); }
+  declineRelic(options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      if (state.screen === 'NTreasureRoom') return this.#chooseType('NProceedButton', options);
 
-  pickBundle(bundle, { confirm = true, ...options } = {}) { return this.#enqueue(async () => {
-    const state = await this.state();
-    if (decisionKind(state) !== 'bundle_selection') throw new Error('No bundle selection is active');
-    const matches = state.choices.filter(c => c.type === 'NCardBundle' && c.enabled)
-      .filter(c => typeof bundle === 'string' ? c.label === bundle : c.ref === bundle?.ref);
-    if (matches.length !== 1) throw new Error('Bundle is missing or ambiguous; pass its choice object');
-    let result = await this.#choose(matches[0], options);
-    if (confirm && result.state.choices.some(c => c.type === 'NConfirmButton' && c.enabled))
-      result = await this.#chooseType('NConfirmButton', options);
-    return result;
-  }); }
+      if (decisionKind(state) !== 'relic_selection') throw new Error('No relic offer is active');
 
-  setDivinationTool(tool, options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    if (!state.crystalSphere) throw new Error('No Crystal Sphere decision is active');
-    const button = state.choices.find(c => c.type === 'NDivinationButton' && c.enabled && c.detail?.tool === tool);
-    if (!button) throw new Error('That divination tool is unavailable');
-    if (button.detail.active) return { status: 'completed', state };
-    return this.#choose(button, options);
-  }); }
+      const skip = state.choices.find((c) => c.enabled && c.label === 'Skip');
+      if (!skip) throw new Error('The game does not offer a decline action here');
 
-  divineCell({ x, y }, options) { return this.#enqueue(() => {
-    if (![x, y].every(value => Number.isInteger(value) && value >= 0 && value <= 2147483647))
-      throw new TypeError('Cell coordinates must be nonnegative 32-bit integers');
-    // BigInt uses the protocol's native-int encoding. Ordinary JSON numbers
-    // become floats in Godot and fail the managed callback's GetInt32 parse.
-    return this.#request('divineCell', { x: BigInt(x), y: BigInt(y) }, options);
-  }); }
+      return this.#choose(skip, options);
+    });
+  }
+
+  pickCard(card, options) {
+    return this.#enqueue(() => this.#pickCard(card, options), { trackDeck: true });
+  }
+
+  pickBundle(bundle, { confirm = true, ...options } = {}) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      if (decisionKind(state) !== 'bundle_selection')
+        throw new Error('No bundle selection is active');
+
+      const matches = state.choices
+        .filter((c) => c.type === 'NCardBundle' && c.enabled)
+        .filter((c) => (typeof bundle === 'string' ? c.label === bundle : c.ref === bundle?.ref));
+      if (matches.length !== 1)
+        throw new Error('Bundle is missing or ambiguous; pass its choice object');
+
+      let result = await this.#choose(matches[0], options);
+      if (confirm && result.state.choices.some((c) => c.type === 'NConfirmButton' && c.enabled))
+        result = await this.#chooseType('NConfirmButton', options);
+      return result;
+    });
+  }
+
+  setDivinationTool(tool, options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      if (!state.crystalSphere) throw new Error('No Crystal Sphere decision is active');
+
+      const button = state.choices.find(
+        (c) => c.type === 'NDivinationButton' && c.enabled && c.detail?.tool === tool,
+      );
+      if (!button) throw new Error('That divination tool is unavailable');
+
+      if (button.detail.active) return { status: 'completed', state };
+
+      return this.#choose(button, options);
+    });
+  }
+
+  divineCell({ x, y }, options) {
+    return this.#enqueue(() => {
+      if (![x, y].every((value) => Number.isInteger(value) && value >= 0 && value <= 2147483647))
+        throw new TypeError('Cell coordinates must be nonnegative 32-bit integers');
+      // BigInt uses the protocol's native-int encoding. Ordinary JSON numbers
+      // become floats in Godot and fail the managed callback's GetInt32 parse.
+      return this.#request('divineCell', { x: BigInt(x), y: BigInt(y) }, options);
+    });
+  }
 
   async #pickCard(card, options, { unselected = false } = {}) {
     const state = await this.state();
-    const candidates = state.choices.filter(c => c.enabled && (!unselected || c.selected !== true) && c.type.includes('CardHolder') && !c.type.includes('Preview'));
-    const matches = typeof card === 'string' ? [cardByName(candidates, card)]
-      : candidates.filter(c => c.ref === card?.ref || c.cardRef === card?.ref);
-    if (matches.length !== 1) throw new Error('Card choice is missing or ambiguous; pass its choice object');
+    const candidates = state.choices.filter(
+      (c) =>
+        c.enabled &&
+        (!unselected || c.selected !== true) &&
+        c.type.includes('CardHolder') &&
+        !c.type.includes('Preview'),
+    );
+    const matches =
+      typeof card === 'string'
+        ? [cardByName(candidates, card)]
+        : candidates.filter((c) => c.ref === card?.ref || c.cardRef === card?.ref);
+    if (matches.length !== 1)
+      throw new Error('Card choice is missing or ambiguous; pass its choice object');
+
     return this.#choose(matches[0], options);
   }
 
-  selectCards(cards, options) { return this.#enqueue(() => this.#selectCards(cards, options), { trackDeck: true }); }
+  selectCards(cards, options) {
+    return this.#enqueue(() => this.#selectCards(cards, options), { trackDeck: true });
+  }
 
   async #selectCards(cards, { confirm = true, ...options } = {}) {
-    const requested = Array.isArray(cards) ? cards : [cards], results = [];
+    const requested = Array.isArray(cards) ? cards : [cards],
+      results = [];
     let state = await this.state();
     for (const [index, card] of requested.entries()) {
-      if (decisionKind(state) !== 'card_selection') return { status: 'choice_required', results,
-        remaining: requested.slice(index), state };
+      if (decisionKind(state) !== 'card_selection')
+        return { status: 'choice_required', results, remaining: requested.slice(index), state };
+
       try {
         const result = await this.#pickCard(card, options, { unselected: true });
-        results.push(result); state = result.state;
-        if (result.status !== 'observed_change') return { ...result, results, remaining: requested.slice(index + 1) };
-      } catch (error) { throw batchError(error, results, requested.slice(index)); }
+        results.push(result);
+        state = result.state;
+        if (result.status !== 'observed_change')
+          return { ...result, results, remaining: requested.slice(index + 1) };
+      } catch (error) {
+        throw batchError(error, results, requested.slice(index));
+      }
     }
-    if (confirm && state.choices.some(c => c.type === 'NConfirmButton' && c.enabled)) {
+    if (confirm && state.choices.some((c) => c.type === 'NConfirmButton' && c.enabled)) {
       try {
         const result = await this.#chooseType('NConfirmButton', options);
-        results.push(result); state = result.state;
+        results.push(result);
+        state = result.state;
         if (result.status !== 'observed_change') return { ...result, results, remaining: [] };
-      } catch (error) { throw batchError(error, results, []); }
+      } catch (error) {
+        throw batchError(error, results, []);
+      }
     }
     return { status: 'completed', results, remaining: [], state };
   }
 
-  upgradeCard(card, options) { return this.#enqueue(async () => {
-    let state = await this.state();
-    if (state.screen === 'NRestSiteRoom') {
-      const smith = state.choices.find(c => c.type === 'NRestSiteButton' && c.label === 'Smith' && c.enabled);
-      if (!smith) throw new Error('Smith is unavailable at this rest site');
-      state = (await this.#choose(smith, options)).state;
-    }
-    if (state.screen !== 'NDeckUpgradeSelectScreen') throw new Error('No deck upgrade selection is active');
-    let result = await this.#pickCard(card, options);
-    if (decisionKind(result.state) === 'card_preview') result = await this.#chooseType('NConfirmButton', options);
-    return result;
-  }, { trackDeck: true }); }
+  upgradeCard(card, options) {
+    return this.#enqueue(
+      async () => {
+        let state = await this.state();
+        if (state.screen === 'NRestSiteRoom') {
+          const smith = state.choices.find(
+            (c) => c.type === 'NRestSiteButton' && c.label === 'Smith' && c.enabled,
+          );
+          if (!smith) throw new Error('Smith is unavailable at this rest site');
 
-  removeCard(card, options) { return this.#enqueue(async () => {
-    let state = await this.state();
-    let purchase;
-    if (state.screen === 'NDeckCardSelectScreen' && state.pending?.kind === 'buy'
-      && state.pending.purpose === 'card_removal' && state.pending.status === 'choice_required') {
-      purchase = { action: state.pending.action, state };
-    } else {
-      if (decisionKind(state) !== 'shop') throw new Error('removeCard needs a shop or its purchased removal grid; use selectCards/confirmSelection for the current choice');
-      const removal = state.choices.find(c => c.type === 'NMerchantCardRemoval' && c.enabled);
-      if (!removal) throw new Error('Card removal is unavailable or unaffordable');
-      purchase = await this.#buy(removal, options);
-      state = purchase.state;
-      if (purchase.status !== 'choice_required' || decisionKind(state) !== 'card_selection') return purchase;
-    }
-    let result = await this.#pickCard(card, options);
-    if (result.status !== 'observed_change') return result;
-    if (decisionKind(result.state) === 'card_preview') result = await this.#chooseType('NConfirmButton', options);
-    if (result.status !== 'observed_change') return result;
-    return this.#waitAction(purchase.action, options);
-  }, { trackDeck: true }); }
+          state = (await this.#choose(smith, options)).state;
+        }
+        if (state.screen !== 'NDeckUpgradeSelectScreen')
+          throw new Error('No deck upgrade selection is active');
 
-  proceed(options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    let matches = state.choices.filter(c => c.enabled && /^(proceed|continue|confirm|embark|leave|confirmbutton|previewconfirm)$/i.test(c.label));
-    if (!matches.length) matches = state.choices.filter(c => c.enabled && c.type === 'NConfirmButton');
-    if (matches.length !== 1) throw new Error('No single clear proceed/confirm choice; inspect decision().choices');
-    return this.#choose(matches[0], options);
-  }); }
+        let result = await this.#pickCard(card, options);
+        if (decisionKind(result.state) === 'card_preview')
+          result = await this.#chooseType('NConfirmButton', options);
+        return result;
+      },
+      { trackDeck: true },
+    );
+  }
 
-  confirmSelection(options) { return this.#enqueue(() => this.#chooseType('NConfirmButton', options), { trackDeck: true }); }
-  cancelSelection(options) { return this.#enqueue(() => this.#chooseType('NBackButton', options)); }
+  removeCard(card, options) {
+    return this.#enqueue(
+      async () => {
+        let state = await this.state();
+        let purchase;
+        if (
+          state.screen === 'NDeckCardSelectScreen' &&
+          state.pending?.kind === 'buy' &&
+          state.pending.purpose === 'card_removal' &&
+          state.pending.status === 'choice_required'
+        ) {
+          purchase = { action: state.pending.action, state };
+        } else {
+          if (decisionKind(state) !== 'shop')
+            throw new Error(
+              'removeCard needs a shop or its purchased removal grid; use selectCards/confirmSelection for the current choice',
+            );
+
+          const removal = state.choices.find((c) => c.type === 'NMerchantCardRemoval' && c.enabled);
+          if (!removal) throw new Error('Card removal is unavailable or unaffordable');
+
+          purchase = await this.#buy(removal, options);
+          state = purchase.state;
+          if (purchase.status !== 'choice_required' || decisionKind(state) !== 'card_selection')
+            return purchase;
+        }
+        let result = await this.#pickCard(card, options);
+        if (result.status !== 'observed_change') return result;
+
+        if (decisionKind(result.state) === 'card_preview')
+          result = await this.#chooseType('NConfirmButton', options);
+        if (result.status !== 'observed_change') return result;
+
+        return this.#waitAction(purchase.action, options);
+      },
+      { trackDeck: true },
+    );
+  }
+
+  proceed(options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      let matches = state.choices.filter(
+        (c) =>
+          c.enabled &&
+          /^(proceed|continue|confirm|embark|leave|confirmbutton|previewconfirm)$/i.test(c.label),
+      );
+      if (!matches.length)
+        matches = state.choices.filter((c) => c.enabled && c.type === 'NConfirmButton');
+      if (matches.length !== 1)
+        throw new Error('No single clear proceed/confirm choice; inspect decision().choices');
+
+      return this.#choose(matches[0], options);
+    });
+  }
+
+  confirmSelection(options) {
+    return this.#enqueue(() => this.#chooseType('NConfirmButton', options), { trackDeck: true });
+  }
+  cancelSelection(options) {
+    return this.#enqueue(() => this.#chooseType('NBackButton', options));
+  }
 
   async #chooseType(type, options) {
     const state = await this.state();
-    const matches = state.choices.filter(c => c.enabled && c.type === type);
-    if (matches.length !== 1) throw new Error(`No single enabled ${type} choice in the current decision`);
+    const matches = state.choices.filter((c) => c.enabled && c.type === type);
+    if (matches.length !== 1)
+      throw new Error(`No single enabled ${type} choice in the current decision`);
+
     return this.#choose(matches[0], options);
   }
 
-  continueRun(options = {}) { return this.#enqueue(async () => {
-    options = { timeoutMs: 30_000, ...options };
-    await this.waitFor(state => state.ready, options);
-    return this.#chooseType('NMainMenuContinueButton', options);
-  }); }
+  continueRun(options = {}) {
+    return this.#enqueue(async () => {
+      options = { timeoutMs: 30_000, ...options };
+      await this.waitFor((state) => state.ready, options);
+      return this.#chooseType('NMainMenuContinueButton', options);
+    });
+  }
 
-  revealEpoch(epoch, options) { return this.#enqueue(() => this.#epoch(epoch, 'Obtained', options)); }
-  inspectEpoch(epoch, options) { return this.#enqueue(() => this.#epoch(epoch, 'Complete', options)); }
-  closeEpoch(options) { return this.#enqueue(async () => {
-    if (decisionKind(await this.state()) !== 'epoch') throw new Error('No epoch detail screen is open');
-    return this.#chooseType('NCloseButton', { timeoutMs: 30_000, ...options });
-  }); }
-  confirmUnlock(options) { return this.#enqueue(async () => {
-    if (decisionKind(await this.state()) !== 'unlock') throw new Error('No unlock confirmation screen is open');
-    await this.waitFor(s => s.ready && s.choices.some(c => c.type === 'NUnlockConfirmButton' && c.enabled), options);
-    return this.#chooseType('NUnlockConfirmButton', { timeoutMs: 30_000, ...options });
-  }); }
+  revealEpoch(epoch, options) {
+    return this.#enqueue(() => this.#epoch(epoch, 'Obtained', options));
+  }
+  inspectEpoch(epoch, options) {
+    return this.#enqueue(() => this.#epoch(epoch, 'Complete', options));
+  }
+  closeEpoch(options) {
+    return this.#enqueue(async () => {
+      if (decisionKind(await this.state()) !== 'epoch')
+        throw new Error('No epoch detail screen is open');
+
+      return this.#chooseType('NCloseButton', { timeoutMs: 30_000, ...options });
+    });
+  }
+  confirmUnlock(options) {
+    return this.#enqueue(async () => {
+      if (decisionKind(await this.state()) !== 'unlock')
+        throw new Error('No unlock confirmation screen is open');
+
+      await this.waitFor(
+        (s) => s.ready && s.choices.some((c) => c.type === 'NUnlockConfirmButton' && c.enabled),
+        options,
+      );
+      return this.#chooseType('NUnlockConfirmButton', { timeoutMs: 30_000, ...options });
+    });
+  }
 
   async #epoch(epoch, requiredState, options) {
     const state = await this.state();
-    const matches = state.choices.filter(c => c.type === 'NEpochSlot' && c.enabled && c.detail?.state === requiredState)
-      .filter(c => typeof epoch === 'string' ? [c.label, c.detail.id].some(v => v?.toLowerCase() === epoch.toLowerCase())
-        : c.ref === epoch?.ref);
-    if (matches.length !== 1) throw new Error('Epoch is missing, ambiguous or not in the required state; inspect timeline.epochs');
+    const matches = state.choices
+      .filter((c) => c.type === 'NEpochSlot' && c.enabled && c.detail?.state === requiredState)
+      .filter((c) =>
+        typeof epoch === 'string'
+          ? [c.label, c.detail.id].some((v) => v?.toLowerCase() === epoch.toLowerCase())
+          : c.ref === epoch?.ref,
+      );
+    if (matches.length !== 1)
+      throw new Error(
+        'Epoch is missing, ambiguous or not in the required state; inspect timeline.epochs',
+      );
+
     return this.#choose(matches[0], { timeoutMs: 30_000, ...options });
   }
 
-  returnToMenu(options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    if (state.navigation?.atMainMenu) return { status: 'completed', state };
-    if (!state.navigation?.canReturnToMenu || !state.navigation.menuStack)
-      throw new Error('Return to menu is unavailable while a run or unlock operation is active; resolve the current decision first');
-    const stack = this.client.object(state.navigation.menuStack);
-    while (await stack.call('Peek')) await stack.call('Pop');
-    return { status: 'completed', state: await this.waitFor(s => s.ready && s.navigation?.atMainMenu, options) };
-  }); }
+  returnToMenu(options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      if (state.navigation?.atMainMenu) return { status: 'completed', state };
 
-  finishResults(options) { return this.#enqueue(async () => {
-    let state = await this.state();
-    if (decisionKind(state) !== 'game_over') throw new Error('No run result screen is open');
-    let runResult = state.result;
-    const outcomeText = new Set(state.text), results = [];
-    for (let step = 0; step < 2; step++) {
-      state = await this.waitFor(s => s.screen !== 'NGameOverScreen' || s.choices.some(c => c.enabled
-        && ['NGameOverContinueButton', 'NReturnToMainMenuButton'].includes(c.type)), options);
-      if (state.screen !== 'NGameOverScreen') break;
-      runResult = state.result ?? runResult;
-      const button = state.choices.find(c => c.enabled && c.type === 'NReturnToMainMenuButton')
-        ?? state.choices.find(c => c.enabled && c.type === 'NGameOverContinueButton');
-      for (const line of state.text ?? []) outcomeText.add(line);
-      const result = await this.#choose(button, { timeoutMs: 30_000, ...options });
-      results.push(result); state = result.state;
-      runResult = state.result ?? runResult;
-      if (result.status !== 'observed_change') return { ...result, results, runResult, outcomeText: [...outcomeText] };
-      if (state.screen !== 'NGameOverScreen') break;
-    }
-    return { status: state.screen === 'NGameOverScreen' ? 'choice_required' : 'completed',
-      state, results, runResult, outcomeText: [...outcomeText] };
-  }); }
+      if (!state.navigation?.canReturnToMenu || !state.navigation.menuStack)
+        throw new Error(
+          'Return to menu is unavailable while a run or unlock operation is active; resolve the current decision first',
+        );
 
-  startRun({ character, timeoutMs = 30_000, ...options } = {}) { return this.#enqueue(async () => {
-    options = { timeoutMs, ...options };
-    let state = await this.state();
-    if (state.player) throw new Error('A run is already in progress');
-    const singleplayer = state.choices.find(c => c.enabled && c.label === 'Singleplayer');
-    if (singleplayer) state = (await this.#choose(singleplayer, options)).state;
-    if (state.screen === 'NSingleplayerSubmenu') {
-      for (const choice of state.choices.filter(c => c.enabled && c.type === 'NSubmenuButton')) {
-        if (await this.client.object(choice.ref).get('name') === 'StandardButton') {
-          state = (await this.#choose(choice, options)).state;
-          break;
+      const stack = this.client.object(state.navigation.menuStack);
+      while (await stack.call('Peek')) await stack.call('Pop');
+      return {
+        status: 'completed',
+        state: await this.waitFor((s) => s.ready && s.navigation?.atMainMenu, options),
+      };
+    });
+  }
+
+  finishResults(options) {
+    return this.#enqueue(async () => {
+      let state = await this.state();
+      if (decisionKind(state) !== 'game_over') throw new Error('No run result screen is open');
+
+      let runResult = state.result;
+      const outcomeText = new Set(state.text),
+        results = [];
+      for (let step = 0; step < 2; step++) {
+        state = await this.waitFor(
+          (s) =>
+            s.screen !== 'NGameOverScreen' ||
+            s.choices.some(
+              (c) =>
+                c.enabled &&
+                ['NGameOverContinueButton', 'NReturnToMainMenuButton'].includes(c.type),
+            ),
+          options,
+        );
+        if (state.screen !== 'NGameOverScreen') break;
+        runResult = state.result ?? runResult;
+        const button =
+          state.choices.find((c) => c.enabled && c.type === 'NReturnToMainMenuButton') ??
+          state.choices.find((c) => c.enabled && c.type === 'NGameOverContinueButton');
+        for (const line of state.text ?? []) outcomeText.add(line);
+        const result = await this.#choose(button, { timeoutMs: 30_000, ...options });
+        results.push(result);
+        state = result.state;
+        runResult = state.result ?? runResult;
+        if (result.status !== 'observed_change')
+          return { ...result, results, runResult, outcomeText: [...outcomeText] };
+
+        if (state.screen !== 'NGameOverScreen') break;
+      }
+      return {
+        status: state.screen === 'NGameOverScreen' ? 'choice_required' : 'completed',
+        state,
+        results,
+        runResult,
+        outcomeText: [...outcomeText],
+      };
+    });
+  }
+
+  startRun({ character, timeoutMs = 30_000, ...options } = {}) {
+    return this.#enqueue(async () => {
+      options = { timeoutMs, ...options };
+      let state = await this.state();
+      if (state.player) throw new Error('A run is already in progress');
+
+      const singleplayer = state.choices.find((c) => c.enabled && c.label === 'Singleplayer');
+      if (singleplayer) state = (await this.#choose(singleplayer, options)).state;
+      if (state.screen === 'NSingleplayerSubmenu') {
+        for (const choice of state.choices.filter(
+          (c) => c.enabled && c.type === 'NSubmenuButton',
+        )) {
+          if ((await this.client.object(choice.ref).get('name')) === 'StandardButton') {
+            state = (await this.#choose(choice, options)).state;
+            break;
+          }
         }
       }
-    }
-    if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
-    state = await this.waitFor(s => s.screen !== 'NCharacterSelectScreen' || s.ready, options);
-    if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
-    if (character) {
-      const matches = state.choices.filter(c => c.type === 'NCharacterSelectButton'
-        && [c.label, c.detail?.id].some(name => name?.toLowerCase() === character.toLowerCase()));
-      if (matches.length !== 1 || !matches[0].enabled) throw new Error('Character is missing, locked or ambiguous');
-      if (!matches[0].selected) state = (await this.#choose(matches[0], options)).state;
-    }
-    const result = await this.#chooseType('NConfirmButton', options);
-    return { ...result, status: result.state.player ? 'completed' : 'choice_required' };
-  }); }
+      if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
 
-  claimGold(options) { return this.#enqueue(async () => {
-    let state = await this.state();
-    const rewards = state.choices.filter(c => c.enabled && c.type === 'NRewardButton' && c.detail?.category === 'GoldReward');
-    const results = [];
-    for (const reward of rewards) {
-      const result = await this.#choose(reward, options);
-      results.push(result); state = result.state;
-      if (result.status !== 'observed_change') return { ...result, results };
-    }
-    return { status: 'completed', results, state };
-  }); }
+      state = await this.waitFor((s) => s.screen !== 'NCharacterSelectScreen' || s.ready, options);
+      if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
 
-  openCardReward(options) { return this.#enqueue(() => this.#openCardReward(options)); }
+      if (character) {
+        const matches = state.choices.filter(
+          (c) =>
+            c.type === 'NCharacterSelectButton' &&
+            [c.label, c.detail?.id].some((name) => name?.toLowerCase() === character.toLowerCase()),
+        );
+        if (matches.length !== 1 || !matches[0].enabled)
+          throw new Error('Character is missing, locked or ambiguous');
+
+        if (!matches[0].selected) state = (await this.#choose(matches[0], options)).state;
+      }
+      const result = await this.#chooseType('NConfirmButton', options);
+      return { ...result, status: result.state.player ? 'completed' : 'choice_required' };
+    });
+  }
+
+  claimGold(options) {
+    return this.#enqueue(async () => {
+      let state = await this.state();
+      const rewards = state.choices.filter(
+        (c) => c.enabled && c.type === 'NRewardButton' && c.detail?.category === 'GoldReward',
+      );
+      const results = [];
+      for (const reward of rewards) {
+        const result = await this.#choose(reward, options);
+        results.push(result);
+        state = result.state;
+        if (result.status !== 'observed_change') return { ...result, results };
+      }
+      return { status: 'completed', results, state };
+    });
+  }
+
+  openCardReward(options) {
+    return this.#enqueue(() => this.#openCardReward(options));
+  }
 
   async #openCardReward(options) {
     const state = await this.state();
     if (decisionKind(state) === 'card_reward') return { status: 'ready', state };
-    const reward = state.choices.find(c => c.enabled && c.type === 'NRewardButton'
-      && c.detail?.category === 'CardReward');
-    if (!reward) throw new Error('No ordinary card reward to open; choose a visible special_card_reward explicitly');
+
+    const reward = state.choices.find(
+      (c) => c.enabled && c.type === 'NRewardButton' && c.detail?.category === 'CardReward',
+    );
+    if (!reward)
+      throw new Error(
+        'No ordinary card reward to open; choose a visible special_card_reward explicitly',
+      );
+
     return this.#choose(reward, options);
   }
 
-  openShop(options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    if (decisionKind(state) === 'shop') return { status: 'ready', state };
-    if (state.shop?.canBrowse && state.shop.control) {
-      this.#browsedShop = state.shop.control;
-      await this.#pace();
-      await this.client.object(state.shop.control).call('OpenInventory');
-      return { status: 'completed', state: await this.waitFor(s => s.ready && decisionKind(s) === 'shop', options) };
-    }
-    return this.#chooseType('NMerchantButton', options);
-  }); }
+  openShop(options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      if (decisionKind(state) === 'shop') return { status: 'ready', state };
 
-  leaveShop(options) { return this.#enqueue(async () => {
-    let state = await this.state();
-    if (decisionKind(state) === 'shop') {
-      state = (await this.#chooseType('NBackButton', options)).state;
-    }
-    if (decisionKind(state) !== 'shop_entrance') throw new Error('Not at the shop entrance');
-    return this.#chooseType('NProceedButton', options);
-  }); }
-  close() { this.client.close(); }
-  async screenshot() { return (await this.client.builtin('Screen')).capture(); }
+      if (state.shop?.canBrowse && state.shop.control) {
+        this.#browsedShop = state.shop.control;
+        await this.#pace();
+        await this.client.object(state.shop.control).call('OpenInventory');
+        return {
+          status: 'completed',
+          state: await this.waitFor((s) => s.ready && decisionKind(s) === 'shop', options),
+        };
+      }
+
+      return this.#chooseType('NMerchantButton', options);
+    });
+  }
+
+  leaveShop(options) {
+    return this.#enqueue(async () => {
+      let state = await this.state();
+      if (decisionKind(state) === 'shop') {
+        state = (await this.#chooseType('NBackButton', options)).state;
+      }
+      if (decisionKind(state) !== 'shop_entrance') throw new Error('Not at the shop entrance');
+
+      return this.#chooseType('NProceedButton', options);
+    });
+  }
+  close() {
+    this.client.close();
+  }
+  async screenshot() {
+    return (await this.client.builtin('Screen')).capture();
+  }
 
   async waitFor(predicate, { timeoutMs = 30_000, signal } = {}) {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 2147483647)
       throw new RangeError('timeoutMs must be a finite nonnegative 32-bit duration');
+
     signal?.throwIfAborted();
-    let wake, unsubscribe, finished = false, rejectStop;
-    const stopped = new Promise((_, reject) => { rejectStop = reject; });
-    const timer = setTimeout(() => rejectStop(new Error('Decision wait timed out; no game action was cancelled or retried')), timeoutMs);
+    let wake,
+      unsubscribe,
+      finished = false,
+      rejectStop;
+    const stopped = new Promise((_, reject) => {
+      rejectStop = reject;
+    });
+    const timer = setTimeout(
+      () =>
+        rejectStop(
+          new DecisionTimeoutError(
+            'Decision wait timed out; no game action was cancelled or retried',
+          ),
+        ),
+      timeoutMs,
+    );
     const closed = () => rejectStop(new Error('Stagehand disconnected while waiting'));
     const aborted = () => rejectStop(signal.reason);
-    const removed = item => {
+    const removed = (item) => {
       if (item.method === 'objects.removed' && item.params.object === this.endpoint.id)
         rejectStop(new Error('Observation endpoint was removed'));
     };
     this.client.on('close', closed);
     this.client.on('notification', removed);
     signal?.addEventListener('abort', aborted, { once: true });
-    const setup = this.endpoint.subscribe('changed', () => wake?.()).then(cancel => {
-      // Setup can complete after a timeout/abort. That subscription still belongs
-      // to this wait and must not survive it.
-      if (finished) cancel().catch(() => {});
-      else unsubscribe = cancel;
-    });
+    const setup = this.endpoint
+      .subscribe('changed', () => wake?.())
+      .then((cancel) => {
+        // Setup can complete after a timeout/abort. That subscription still belongs
+        // to this wait and must not survive it.
+        if (finished) cancel().catch(() => {});
+        else unsubscribe = cancel;
+      });
     try {
       await Promise.race([setup, stopped]);
       while (true) {
         let notify;
-        const changed = new Promise(resolve => { notify = resolve; });
+        const changed = new Promise((resolve) => {
+          notify = resolve;
+        });
         wake = notify;
         const state = await Promise.race([this.state(), stopped]);
         if (predicate(state)) return state;
+
         await Promise.race([changed, stopped]);
       }
     } finally {
@@ -625,22 +925,40 @@ export class Sts2 {
   }
 
   async spectate({ after, ...options } = {}) {
-    if (this.#spectatorWaiting) throw new Error('This observer is already waiting; await or abort that spectate call');
+    if (this.#spectatorWaiting)
+      throw new Error('This observer is already waiting; await or abort that spectate call');
+
     if (after !== undefined && after !== this.#spectatorLast?.frame)
-      throw new Error('Pass the last frame returned by this observer; a reconnect starts a new continuation');
+      throw new Error(
+        'Pass the last frame returned by this observer; a reconnect starts a new continuation',
+      );
+
     this.#spectatorWaiting = true;
     try {
       const prior = this.#spectatorLast?.key;
-      const state = await this.waitFor(state => isSettledObservation(state)
-        && observationKey(state) !== prior, options);
-      const frame = { position: ++this.#spectatorPosition, boundary: observationBoundary(state),
-        view: present(decisionView(state)) };
+      const state = await this.waitFor(
+        (state) => isSettledObservation(state) && observationKey(state) !== prior,
+        options,
+      );
+      const frame = {
+        position: ++this.#spectatorPosition,
+        boundary: observationBoundary(state),
+        view: present(decisionView(state)),
+      };
       this.#spectatorLast = { frame, key: observationKey(state) };
       return frame;
-    } finally { this.#spectatorWaiting = false; }
+    } catch (error) {
+      if (error instanceof DecisionTimeoutError) return null;
+
+      throw error;
+    } finally {
+      this.#spectatorWaiting = false;
+    }
   }
 
-  ready(options) { return this.decision({ ...options, wait: true }); }
+  ready(options) {
+    return this.decision({ ...options, wait: true });
+  }
 
   async waitForAction(action, options) {
     const outcome = await this.#waitAction(action, options);
@@ -650,16 +968,23 @@ export class Sts2 {
   async #request(kind, params, options) {
     await this.#pace();
     const accepted = await this.endpoint.invoke('request', { kind, ...params });
-    try { return await this.#waitAction(accepted.action, options); }
-    catch (error) { error.action = accepted.action; throw error; }
+    try {
+      return await this.#waitAction(accepted.action, options);
+    } catch (error) {
+      error.action = accepted.action;
+      throw error;
+    }
   }
 
   async #waitAction(action, options) {
-    const state = await this.waitFor(state => state.pending?.action === action
-      && !['accepted', 'running'].includes(state.pending.status)
-      && (state.ready || ['failed', 'cancelled'].includes(state.pending.status)), options);
-    return { action, status: state.pending.status,
-      error: state.pending.error, state };
+    const state = await this.waitFor(
+      (state) =>
+        state.pending?.action === action &&
+        !['accepted', 'running'].includes(state.pending.status) &&
+        (state.ready || ['failed', 'cancelled'].includes(state.pending.status)),
+      options,
+    );
+    return { action, status: state.pending.status, error: state.pending.error, state };
   }
 
   play(card, target, options) {
@@ -667,136 +992,256 @@ export class Sts2 {
   }
 
   async #play(card, target, options) {
-    if (typeof card !== 'string' && !card?.ref) throw new TypeError('Pass a hand card object or exact card name');
+    if (typeof card !== 'string' && !card?.ref)
+      throw new TypeError('Pass a hand card object or exact card name');
+
     const state = await this.state();
     if (typeof card === 'string') card = cardByName(state.combat?.hand ?? [], card);
     target = creatureTarget(state, target);
     return this.#request('play', { card: card.ref, target: target?.ref }, options);
   }
 
-  abandonRun(options) { return this.#enqueue(() => this.#request('abandonRun', {}, options)); }
+  abandonRun(options) {
+    return this.#enqueue(() => this.#request('abandonRun', {}, options));
+  }
 
-  endTurn(options) { return this.#enqueue(() => this.#request('endTurn', {}, options)); }
+  endTurn(options) {
+    return this.#enqueue(() => this.#request('endTurn', {}, options));
+  }
 
-  playCards(plays, { endTurn = false, ...options } = {}) { return this.#enqueue(async () => {
-    const results = [];
-    for (const [index, play] of plays.entries()) {
-      const item = typeof play === 'string' || play?.ref ? { card: play } : play;
-      let result, selection;
-      try {
-        result = await this.#play(item.card, item.target, options);
-        if (result.status === 'choice_required' && item.select !== undefined) {
-          selection = await this.#selectCards(item.select, options);
-          if (selection.status !== 'completed') return { ...selection, results: [...results, { ...result, selection }],
-            remaining: plays.slice(index + 1), endTurnPending: endTurn };
-          result = await this.#waitAction(result.action, options);
+  playCards(plays, { endTurn = false, ...options } = {}) {
+    return this.#enqueue(async () => {
+      const results = [];
+      for (const [index, play] of plays.entries()) {
+        const item = typeof play === 'string' || play?.ref ? { card: play } : play;
+        let result, selection;
+        try {
+          result = await this.#play(item.card, item.target, options);
+          if (result.status === 'choice_required' && item.select !== undefined) {
+            selection = await this.#selectCards(item.select, options);
+            if (selection.status !== 'completed')
+              return {
+                ...selection,
+                results: [...results, { ...result, selection }],
+                remaining: plays.slice(index + 1),
+                endTurnPending: endTurn,
+              };
+
+            result = await this.#waitAction(result.action, options);
+          }
+        } catch (error) {
+          if (result)
+            results.push({
+              ...result,
+              selection: selection ?? {
+                results: error.results ?? [],
+                remaining: error.remaining ?? [],
+              },
+            });
+          throw batchError(error, results, plays.slice(index + (result ? 1 : 0)));
         }
-      } catch (error) {
-        if (result) results.push({ ...result, selection: selection
-          ?? { results: error.results ?? [], remaining: error.remaining ?? [] } });
-        throw batchError(error, results, plays.slice(index + (result ? 1 : 0)));
-      }
-      results.push(result);
-      if (result.status !== 'completed') return { status: result.status, results, remaining: plays.slice(index + 1), endTurnPending: endTurn, state: result.state };
-      if (!result.state.combat) return { status: 'completed', results, remaining: plays.slice(index + 1),
-        combatEnded: true, turnEnded: false, state: result.state };
-    }
-    let state = results.at(-1)?.state ?? await this.state();
-    let turnEnded = false;
-    if (endTurn && state.combat) {
-      try {
-        const result = await this.#request('endTurn', {}, options);
-        results.push(result); state = result.state;
-        if (result.status !== 'completed') return { ...result, results, remaining: [] };
-        turnEnded = true;
-      } catch (error) { throw batchError(error, results, []); }
-    }
-    return { status: 'completed', results, remaining: [], turnEnded, state };
-  }); }
+        results.push(result);
+        if (result.status !== 'completed')
+          return {
+            status: result.status,
+            results,
+            remaining: plays.slice(index + 1),
+            endTurnPending: endTurn,
+            state: result.state,
+          };
 
-  async #chooseItems(items, candidates, continues, options) {
+        if (!result.state.combat)
+          return {
+            status: 'completed',
+            results,
+            remaining: plays.slice(index + 1),
+            combatEnded: true,
+            turnEnded: false,
+            state: result.state,
+          };
+      }
+      let state = results.at(-1)?.state ?? (await this.state());
+      let turnEnded = false;
+      if (endTurn && state.combat) {
+        try {
+          const result = await this.#request('endTurn', {}, options);
+          results.push(result);
+          state = result.state;
+          if (result.status !== 'completed') return { ...result, results, remaining: [] };
+
+          turnEnded = true;
+        } catch (error) {
+          throw batchError(error, results, []);
+        }
+      }
+      return { status: 'completed', results, remaining: [], turnEnded, state };
+    });
+  }
+
+  async #claimRewards(items, options) {
     const requested = Array.isArray(items) ? items : [items];
     const results = [];
     for (const [index, item] of requested.entries()) {
       try {
-      const state = await this.state();
-      const matches = candidates(state).filter(c => typeof item === 'string'
-        ? c.label.toLowerCase() === item.toLowerCase() : c.ref === item?.ref);
-      if (matches.length !== 1) throw new Error('Item is missing or ambiguous; pass its current choice object');
-      if (matches[0].blockedBy === 'potion_inventory_full') return { status: 'choice_required',
-        blocker: { kind: 'potion_inventory_full', choice: choiceView(matches[0]) },
-        results, remaining: requested.slice(index), state };
-      const result = await this.#choose(typeof item === 'object' ? item : matches[0], options);
-      results.push(result);
-      if (result.status !== 'observed_change') return { ...result, results, remaining: requested.slice(index + 1) };
-      if (!continues(result.state)) return { status: index + 1 === requested.length ? 'completed' : 'choice_required',
-        results, remaining: requested.slice(index + 1), state: result.state };
-      } catch (error) { throw batchError(error, results, requested.slice(index)); }
+        const state = await this.state();
+        if (decisionKind(state) !== 'rewards') throw new Error('No reward list is open');
+
+        const matches = state.choices
+          .filter((c) => c.type === 'NRewardButton')
+          .filter((c) =>
+            typeof item === 'string'
+              ? c.label.toLowerCase() === item.toLowerCase()
+              : c.ref === item?.ref,
+          );
+        if (matches.length !== 1)
+          throw new Error('Item is missing or ambiguous; pass its current choice object');
+
+        if (matches[0].blockedBy === 'potion_inventory_full')
+          return {
+            status: 'choice_required',
+            blocker: { kind: 'potion_inventory_full', choice: choiceView(matches[0]) },
+            results,
+            remaining: requested.slice(index),
+            state,
+          };
+
+        const result = await this.#choose(typeof item === 'object' ? item : matches[0], options);
+        results.push(result);
+        if (result.status !== 'observed_change')
+          return { ...result, results, remaining: requested.slice(index + 1) };
+
+        if (decisionKind(result.state) !== 'rewards')
+          return {
+            status: index + 1 === requested.length ? 'completed' : 'choice_required',
+            results,
+            remaining: requested.slice(index + 1),
+            state: result.state,
+          };
+      } catch (error) {
+        throw batchError(error, results, requested.slice(index));
+      }
     }
-    return { status: 'completed', results, remaining: [], state: results.at(-1)?.state ?? await this.state() };
+    return {
+      status: 'completed',
+      results,
+      remaining: [],
+      state: results.at(-1)?.state ?? (await this.state()),
+    };
   }
 
   async #buy(item, options) {
     const state = await this.state();
     if (decisionKind(state) !== 'shop') throw new Error('Open the shop inventory before buying');
-    const matches = state.choices.filter(c => /^NMerchant(Card|Relic|Potion|CardRemoval)$/.test(c.type))
-      .filter(c => typeof item === 'string' ? c.label.toLowerCase() === item.toLowerCase()
-        : c.offerRef === item?.offerRef);
-    if (matches.length !== 1) throw new Error('Shop offer is missing or ambiguous; pass its current choice object');
+
+    const matches = state.choices
+      .filter((c) => /^NMerchant(Card|Relic|Potion|CardRemoval)$/.test(c.type))
+      .filter((c) =>
+        typeof item === 'string'
+          ? c.label.toLowerCase() === item.toLowerCase()
+          : c.offerRef === item?.offerRef,
+      );
+    if (matches.length !== 1)
+      throw new Error('Shop offer is missing or ambiguous; pass its current choice object');
+
     const offer = matches[0];
-    if (!offer.enabled || !offer.offerRef) throw new Error(offer.blockedReason ?? 'Shop offer is sold out or unaffordable');
+    if (!offer.enabled || !offer.offerRef)
+      throw new Error(offer.blockedReason ?? 'Shop offer is sold out or unaffordable');
+
     return this.#request('buy', { offer: offer.offerRef }, options);
   }
 
-  buy(items, options) { return this.#enqueue(async () => {
-    const requested = Array.isArray(items) ? items : [items], results = [];
-    for (const [index, item] of requested.entries()) {
-      try {
-        const result = await this.#buy(item, options);
-        results.push(result);
-        if (result.status !== 'completed') return { ...result, results, remaining: requested.slice(index + 1) };
-      } catch (error) { throw batchError(error, results, requested.slice(index)); }
-    }
-    return { status: 'completed', results, remaining: [], state: results.at(-1)?.state ?? await this.state() };
-  }); }
+  buy(items, options) {
+    return this.#enqueue(async () => {
+      const requested = Array.isArray(items) ? items : [items],
+        results = [];
+      for (const [index, item] of requested.entries()) {
+        try {
+          const result = await this.#buy(item, options);
+          results.push(result);
+          if (result.status !== 'completed')
+            return { ...result, results, remaining: requested.slice(index + 1) };
+        } catch (error) {
+          throw batchError(error, results, requested.slice(index));
+        }
+      }
+      return {
+        status: 'completed',
+        results,
+        remaining: [],
+        state: results.at(-1)?.state ?? (await this.state()),
+      };
+    });
+  }
 
-  claimRewards(items, options) { return this.#enqueue(() => this.#claimRewards(items, options)); }
-
-  #claimRewards(items, options) { return this.#chooseItems(items, state => {
-    if (decisionKind(state) !== 'rewards') throw new Error('No reward list is open');
-    return state.choices.filter(c => c.type === 'NRewardButton');
-  }, state => decisionKind(state) === 'rewards', options); }
+  claimRewards(items, options) {
+    return this.#enqueue(() => this.#claimRewards(items, options));
+  }
 
   collectLoot({ gold = true, potions = false, relics = [], openCardReward = true } = {}, options) {
     return this.#enqueue(async () => {
-      if (typeof gold !== 'boolean' || typeof openCardReward !== 'boolean'
-        || !(typeof potions === 'boolean' || Array.isArray(potions)) || !Array.isArray(relics))
-        throw new TypeError('Use gold/openCardReward booleans, potions boolean or list, and an explicit relic list');
+      if (
+        typeof gold !== 'boolean' ||
+        typeof openCardReward !== 'boolean' ||
+        !(typeof potions === 'boolean' || Array.isArray(potions)) ||
+        !Array.isArray(relics)
+      )
+        throw new TypeError(
+          'Use gold/openCardReward booleans, potions boolean or list, and an explicit relic list',
+        );
+
       const state = await this.state();
       if (decisionKind(state) !== 'rewards') throw new Error('No reward list is open');
-      const rewards = state.choices.filter(c => c.type === 'NRewardButton');
-      const requested = rewards.filter(c => c.detail?.category === 'GoldReward' && gold);
+
+      const rewards = state.choices.filter((c) => c.type === 'NRewardButton');
+      const requested = rewards.filter((c) => c.detail?.category === 'GoldReward' && gold);
       const add = (wanted, category) => {
-        const eligible = rewards.filter(c => c.detail?.category === category);
-        if (wanted === true) { requested.push(...eligible); return; }
+        const eligible = rewards.filter((c) => c.detail?.category === category);
+        if (wanted === true) {
+          requested.push(...eligible);
+          return;
+        }
+
         for (const item of wanted || []) {
-          const matches = eligible.filter(c => typeof item === 'string'
-            ? c.label.toLowerCase() === item.toLowerCase() : c.ref === item?.ref);
-          if (matches.length !== 1) throw new Error('Requested loot is missing or ambiguous; pass its current reward object');
+          const matches = eligible.filter((c) =>
+            typeof item === 'string'
+              ? c.label.toLowerCase() === item.toLowerCase()
+              : c.ref === item?.ref,
+          );
+          if (matches.length !== 1)
+            throw new Error(
+              'Requested loot is missing or ambiguous; pass its current reward object',
+            );
+
           if (!requested.includes(matches[0])) requested.push(matches[0]);
         }
       };
-      add(potions, 'PotionReward'); add(relics, 'RelicReward');
+      add(potions, 'PotionReward');
+      add(relics, 'RelicReward');
       const claimed = await this.#claimRewards(requested, options);
       if (claimed.status !== 'completed') return claimed;
-      if (decisionKind(claimed.state) !== 'rewards') return { ...claimed, status: 'choice_required' };
-      if (!openCardReward || !claimed.state.choices.some(c => c.type === 'NRewardButton' && c.enabled
-        && c.detail?.category === 'CardReward')) return claimed;
+
+      if (decisionKind(claimed.state) !== 'rewards')
+        return { ...claimed, status: 'choice_required' };
+
+      if (
+        !openCardReward ||
+        !claimed.state.choices.some(
+          (c) => c.type === 'NRewardButton' && c.enabled && c.detail?.category === 'CardReward',
+        )
+      )
+        return claimed;
+
       try {
         const opened = await this.#openCardReward(options);
-        return { ...opened, status: opened.status === 'observed_change' ? 'choice_required' : opened.status,
-          results: [...claimed.results, opened], remaining: [] };
-      } catch (error) { throw batchError(error, claimed.results, []); }
+        return {
+          ...opened,
+          status: opened.status === 'observed_change' ? 'choice_required' : opened.status,
+          results: [...claimed.results, opened],
+          remaining: [],
+        };
+      } catch (error) {
+        throw batchError(error, claimed.results, []);
+      }
     });
   }
 
@@ -804,15 +1249,27 @@ export class Sts2 {
     return this.#enqueue(() => this.#potion('potion', potion, target, options));
   }
 
-  throwPotionAtShopkeeper(potion, options) { return this.#enqueue(async () => {
-    const state = await this.state();
-    const matches = state.player?.potions.filter(p => typeof potion === 'string'
-      ? p.name.toLowerCase() === potion.toLowerCase() : p.ref === potion?.ref) ?? [];
-    if (matches.length !== 1) throw new Error('Potion is missing or ambiguous; pass its current potion object');
-    const target = matches[0].targets?.find(t => t.kind === 'shopkeeper');
-    if (!matches[0].usable || !target) throw new Error('No shopkeeper target is available; this happens before entering the shop inventory');
-    return this.#potion('potion', matches[0], target, options);
-  }); }
+  throwPotionAtShopkeeper(potion, options) {
+    return this.#enqueue(async () => {
+      const state = await this.state();
+      const matches =
+        state.player?.potions.filter((p) =>
+          typeof potion === 'string'
+            ? p.name.toLowerCase() === potion.toLowerCase()
+            : p.ref === potion?.ref,
+        ) ?? [];
+      if (matches.length !== 1)
+        throw new Error('Potion is missing or ambiguous; pass its current potion object');
+
+      const target = matches[0].targets?.find((t) => t.kind === 'shopkeeper');
+      if (!matches[0].usable || !target)
+        throw new Error(
+          'No shopkeeper target is available; this happens before entering the shop inventory',
+        );
+
+      return this.#potion('potion', matches[0], target, options);
+    });
+  }
 
   discardPotion(potion, options) {
     return this.#enqueue(() => this.#potion('discardPotion', potion, undefined, options));
@@ -821,11 +1278,15 @@ export class Sts2 {
   async #potion(kind, potion, target, options) {
     const state = await this.state();
     if (typeof potion === 'string') {
-      const matches = state.player?.potions.filter(p => p.name.toLowerCase() === potion.toLowerCase()) ?? [];
-      if (matches.length !== 1) throw new Error('Potion is missing or ambiguous; use its current potion object');
+      const matches =
+        state.player?.potions.filter((p) => p.name.toLowerCase() === potion.toLowerCase()) ?? [];
+      if (matches.length !== 1)
+        throw new Error('Potion is missing or ambiguous; use its current potion object');
+
       potion = matches[0];
     }
     if (!potion?.ref) throw new TypeError('Pass a current potion object or exact potion name');
+
     target = creatureTarget(state, target);
     return this.#request(kind, { potion: potion.ref, target: target?.ref }, options);
   }
@@ -838,36 +1299,60 @@ export class Sts2 {
       if (await parent.call('is_class', 'ScrollContainer')) ancestors.push(parent);
       parent = await parent.call('get_parent');
     }
-    for (const ancestor of ancestors.reverse()) await ancestor.call('ensure_control_visible', control);
+    for (const ancestor of ancestors.reverse())
+      await ancestor.call('ensure_control_visible', control);
     if (ancestors.length) await pause(60);
     const [x, y, width, height] = (await control.call('get_global_rect')).args;
     const { root } = await (await this.client.builtin('SceneTree')).invoke('current');
     const [a, b, c, d, tx, ty] = (await root.call('get_final_transform')).args;
-    const cx = x + width / 2, cy = y + height / 2;
+    const cx = x + width / 2,
+      cy = y + height / 2;
     return new GodotValue({ type: 'Vector2', args: [a * cx + c * cy + tx, b * cx + d * cy + ty] });
   }
 
-  choose(choice, options) { return this.#enqueue(() => this.#choose(choice, options), { trackDeck: true }); }
+  choose(choice, options) {
+    return this.#enqueue(() => this.#choose(choice, options), { trackDeck: true });
+  }
 
   async #choose(choice, { timeoutMs = 8000 } = {}) {
     const before = await this.state();
-    const matches = typeof choice === 'string'
-      ? before.choices.filter(item => item.ref === choice || item.label.toLowerCase() === choice.toLowerCase())
-      : before.choices.filter(item => item.ref === choice?.ref);
-    if (matches.length !== 1) throw Object.assign(new Error('Choice is missing or ambiguous; use an object from state.choices'),
-      { code: 'STALE_CHOICE', state: before });
+    const matches =
+      typeof choice === 'string'
+        ? before.choices.filter(
+            (item) => item.ref === choice || item.label.toLowerCase() === choice.toLowerCase(),
+          )
+        : before.choices.filter((item) => item.ref === choice?.ref);
+    if (matches.length !== 1)
+      throw Object.assign(
+        new Error('Choice is missing or ambiguous; use an object from state.choices'),
+        { code: 'STALE_CHOICE', state: before },
+      );
+
     const current = matches[0];
-    if (typeof choice === 'object' && current.label !== choice.label) throw Object.assign(
-      new Error('Choice reference now represents different content; observe again'), { code: 'STALE_CHOICE', state: before });
-    if (!current.enabled) throw Object.assign(new Error(current.blockedReason ?? 'That choice is disabled'),
-      { code: 'STALE_CHOICE', state: before });
-    const control = current.activation?.kind === 'select_card' ? null : this.client.object(current.ref);
+    if (typeof choice === 'object' && current.label !== choice.label)
+      throw Object.assign(
+        new Error('Choice reference now represents different content; observe again'),
+        { code: 'STALE_CHOICE', state: before },
+      );
+
+    if (!current.enabled)
+      throw Object.assign(new Error(current.blockedReason ?? 'That choice is disabled'), {
+        code: 'STALE_CHOICE',
+        state: before,
+      });
+
+    const control =
+      current.activation?.kind === 'select_card' ? null : this.client.object(current.ref);
     const prior = fingerprint(before);
-    if (current.type === 'NBackButton' && before.shop?.open) this.#browsedShop = before.shop.control;
+    if (current.type === 'NBackButton' && before.shop?.open)
+      this.#browsedShop = before.shop.control;
     await this.#pace();
     const characterSelection = current.type === 'NCharacterSelectButton';
     if (!characterSelection && !current.activation && !this.#nativeClicks.has(current.type)) {
-      this.#nativeClicks.set(current.type, (await control.inspect()).methods.some(method => method.name === 'ForceClick'));
+      this.#nativeClicks.set(
+        current.type,
+        (await control.inspect()).methods.some((method) => method.name === 'ForceClick'),
+      );
     }
     if (current.activation?.kind === 'select_card') {
       await this.endpoint.invoke('select_card', { card: current.activation.card });
@@ -893,10 +1378,13 @@ export class Sts2 {
       }
     }
     try {
-      const state = await this.waitFor(state => state.ready && fingerprint(state) !== prior, { timeoutMs });
+      const state = await this.waitFor((state) => state.ready && fingerprint(state) !== prior, {
+        timeoutMs,
+      });
       return { status: 'observed_change', selectedChoice: choiceView(current), state };
     } catch (error) {
       if (!error.message.startsWith('Decision wait timed out')) throw error;
+
       return { status: 'unconfirmed', state: await this.state(), warning: error.message };
     }
   }

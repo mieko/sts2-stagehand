@@ -4,10 +4,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <HostBuildDir Condition="'$(HostBuildDir)' == ''">$(MSBuildThisFileDirectory)../build</HostBuildDir>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="SelectionNative.cs" />
-    <Reference Include="RuntimeControl"><HintPath>../build/RuntimeControl.dll</HintPath></Reference>
+    <Reference Include="RuntimeControl"><HintPath>$(HostBuildDir)/RuntimeControl.dll</HintPath></Reference>
     <Reference Include="GodotSharp"><HintPath>$(GameDataDir)/GodotSharp.dll</HintPath></Reference>
     <Reference Include="sts2"><HintPath>$(GameDataDir)/sts2.dll</HintPath></Reference>
   </ItemGroup>

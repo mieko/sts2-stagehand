@@ -9,7 +9,9 @@ public static class Entry
     public static void Init()
     {
         var token = OS.GetEnvironment("STAGEHAND_TOKEN");
-        if (string.IsNullOrEmpty(token)) return;
+        if (string.IsNullOrEmpty(token))
+            return;
+
         GD.Print("STAGEHAND_USER_DIR ", OS.GetUserDataDir());
         var tree = (SceneTree)Engine.GetMainLoop();
         tree.Connect(SceneTree.SignalName.ProcessFrame,
@@ -19,24 +21,28 @@ public static class Entry
 
     private static void Attach(SceneTree tree, string token)
     {
+        Node? bridge = null;
         try
         {
             var script = GD.Load<GDScript>("res://addons/stagehand/bridge.gd");
-            var bridge = script.New().As<Node>();
+            bridge = script.New().As<Node>();
             bridge.Name = "Stagehand";
             tree.Root.AddChild(bridge);
             bridge.Call("enable_builtins");
             var error = (Error)bridge.Call("start", token, 0).AsInt32();
             if (error != Error.Ok)
-            {
-                bridge.QueueFree();
                 throw new InvalidOperationException($"Stagehand start: {error}");
-            }
-            GD.Print("STAGEHAND_READY ", bridge.Call("get_port").AsInt32());
+
             Sts2Host.Install(bridge, tree);
+            GD.Print("STAGEHAND_READY ", bridge.Call("get_port").AsInt32());
         }
         catch (Exception error)
         {
+            if (bridge != null && GodotObject.IsInstanceValid(bridge))
+            {
+                bridge.Call("stop");
+                bridge.QueueFree();
+            }
             GD.PrintErr("Stagehand initialization failed: ", error);
         }
     }

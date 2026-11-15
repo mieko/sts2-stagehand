@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="test/**/*.cs" />
+    <Compile Remove="test/**/*.cs;stagehand/**/*.cs" />
     <Reference Include="GodotSharp">
       <HintPath>$(GameDataDir)/GodotSharp.dll</HintPath>
       <Private>false</Private>

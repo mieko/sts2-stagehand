@@ -8,23 +8,25 @@ addon/client. No MCP server or provider-specific runtime is required.
 
 ## Source layout and dependencies
 
-Keep these local repositories adjacent:
+Clone the consumer with its pinned Stagehand submodule:
 
 ```sh
-git clone git@github.com:mieko/stagehand.git
-git clone git@github.com:mieko/sts2-stagehand.git
+git clone --recurse-submodules git@github.com:mieko/sts2-stagehand.git
+cd sts2-stagehand
+npm ci
 ```
 
 ```text
-workspace/
-  stagehand/  # reusable addon, generic JS client, fixtures
-  sts2-stagehand/   # this game-specific consumer
+sts2-stagehand/
+  stagehand/       # pinned reusable addon, client and standalone fixtures
+  sts2.mjs         # this game's semantic client
 ```
 
-The npm dependency `file:../stagehand` links the live local core source.
-Run `npm ci` here to install that link and the project-local `ws` dependency. The
-core addon itself has no managed or Node prerequisite. This consumer's mod uses
-.NET and the game's own assemblies; do not ship game DLLs with the source.
+The Git submodule records the exact Stagehand revision. Both the npm dependency
+`file:./stagehand` and the default mod build use that checkout. For an existing
+clone, run `git submodule update --init --recursive` before `npm ci`.
+This consumer's mod uses .NET and the game's own assemblies; do not ship game DLLs
+with the source.
 
 ## Connect and play
 
@@ -96,7 +98,8 @@ enemy and other state snapshots remain plain data.
 
 For a separate read-only watcher, `observer.spectate()` returns the current settled
 frame; subsequent `observer.spectate({after: frame, timeoutMs: 20000})` calls wait
-for a new meaningful position. Print `frame.view`. It does not normalize or drive
+for a new meaningful position. An idle timeout returns null; keep the previous
+frame as the continuation. Print a returned frame's `view`. It does not normalize or drive
 the UI, and a real choice remains visible while its original action is pending.
 Keep the frame object in the same persistent JS session. Per-action positions do
 not claim another client's whole batch has ended.
@@ -105,6 +108,26 @@ See [the API](docs/api.md) for semantic state, effects/enchantments/afflictions,
 queue and failure semantics, potions/shopkeepers, rewards/events and explicit
 results/epoch/unlock handling. `state()`, `deck()`, `inspectCard()` and `piles()` are passive reads;
 `decision()`/`ready()` may advance documented presentation-only UI.
+
+## How the integration fits together
+
+The native mod creates a Stagehand bridge, registers one game object, and supplies
+callbacks for observing state and executing native operations. The external client
+wraps that object with the semantic API; it uses the ordinary generic client for
+discovery, calls, subscriptions, screenshots and input fallback.
+
+| File | Responsibility |
+| --- | --- |
+| [Entry.cs](Entry.cs) | Attach and enable the runtime bridge; clean it up if installation fails. |
+| [sts2.gd](sts2.gd) | Register `Sts2`, its methods, observation callback and `changed` event. |
+| [Sts2Host.cs](Sts2Host.cs) | Address current game objects, read active UI, execute native actions and report completion. |
+| [ModelProjection.cs](ModelProjection.cs) | Turn native models into public card, effect and status facts without owning game objects. |
+| [sts2.mjs](sts2.mjs) | Install the wrapper factory and expose queued semantic operations. |
+| [decision.mjs](decision.mjs), [present.mjs](present.mjs), [spectator.mjs](spectator.mjs) | Pure decision/presentation transforms and settled-observation comparisons. |
+
+For another Godot game, the small registration in `sts2.gd` and the wrapper
+factory in `sts2.mjs` are the integration pattern. The native game knowledge lives
+in this consumer, alongside the facade that names useful operations for clients.
 
 ## Build the mod
 
@@ -169,23 +192,29 @@ npm test
 npm run test:host
 ```
 
-The JS suite checks queues, completion, explicit choices and partial progress.
+The JS suite groups connection, inspection, actions, presentation and spectator
+behavior under `test/`; `npm test` also runs the offline Python launcher checks.
+These use temporary fake app executables, not a game installation. The JS checks
+cover queues, completion, explicit choices and partial progress.
 The pure C# test links the production unordered-card ordering helper and needs no game
 DLLs or running game; it uses .NET 10. Build the complete host against the selected
 game assemblies after managed changes. Live game checks must use a disposable
 isolated instance and be coordinated with its user.
 
-After building the host, check selection ownership against the selected game
+After building the host, check native models and selection ownership against the selected game
 assemblies without launching a game:
 
 ```sh
 npm run test:selection -- -p:GameDataDir="$GAME_DATA_DIR"
 ```
 
-This uses uninitialized managed shells of the actual game screen/grid types to
-check full-list extraction and filtering. It creates no native nodes, loads no
-engine, reads no saves and makes no claim to replace live selection qualification.
+This uses managed shells of the actual game types to check eligible-card lists,
+detached previews and model preservation, numeric values/context, costs, facing
+and ending phases. It creates no native nodes, loads no engine, reads no saves
+and makes no claim to replace live game qualification.
 Game assemblies and build outputs remain ignored local prerequisites.
+When qualifying an alternate build output, also pass
+`-p:HostBuildDir=/absolute/path/to/output` to select that host assembly.
 
 The binding has been exercised on Steam v0.107.1 / MegaDot 4.5.1-m.12, macOS arm64,
 including complete normal three-act wins with all five main-branch characters, ordinary between-room decisions,
