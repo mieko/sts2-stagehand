@@ -423,7 +423,18 @@ public sealed class Sts2Host
         return GodotObject.IsInstanceValid(hitbox) ? hitbox : control;
     }
 
-    private object Choice(Control control, bool skipped = false)
+    private static (bool Enabled, object Detail) SphereCellInfo(
+        MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereCell entity, bool finished) =>
+        (entity.IsHidden && !finished, new
+        {
+            X = entity.X,
+            Y = entity.Y,
+            Hidden = entity.IsHidden,
+            Highlighted = entity.IsHighlighted,
+            RevealedItem = !entity.IsHidden ? entity.Item?.GetType().Name : null
+        });
+
+    private object Choice(Control control, bool skipped, bool sphereFinished)
     {
         var type = control.GetType().Name;
         var hitbox = Hitbox(control);
@@ -604,15 +615,9 @@ public sealed class Sts2Host
         {
             var entity = cell.Entity;
             label = $"Cell ({entity.X},{entity.Y})";
-            enabled &= entity.IsHidden;
-            detail = new
-            {
-                X = entity.X,
-                Y = entity.Y,
-                Hidden = entity.IsHidden,
-                Highlighted = entity.IsHighlighted,
-                RevealedItem = !entity.IsHidden ? entity.Item?.GetType().Name : null
-            };
+            var projection = SphereCellInfo(entity, sphereFinished);
+            enabled &= projection.Enabled;
+            detail = projection.Detail;
         }
         if (type == "NDivinationButton")
             detail = new
@@ -775,13 +780,14 @@ public sealed class Sts2Host
             controls.RemoveAll(IsTimelineOverlay);
         if (scope.GetType().Name is "NMerchantRoom")
             controls.RemoveAll(c => HasParentType(c, "NMerchantInventory"));
+        var sphereFinished = scope is NCrystalSphereScreen && Get(Get(scope, "_entity"), "IsFinished") is true;
         var choices = controls.Where(c => c is NClickableControl or BaseButton or NCardHolder or NMapPoint or NMerchantSlot or NCardBundle)
             .Where(c => c is not NAncientDialogueLine)
             .Where(c => !isUnlock || c.GetType().Name == "NUnlockConfirmButton")
             .Where(c => c is NCardHolder or NMerchantSlot or NCardBundle || !HasChoiceParent(c))
             .Where(c => !(CombatReady && HasParentType(c, "NPlayerHand")))
             .Where(c => scope is not NCardGridSelectionScreen || c is not NCardHolder)
-            .Take(200).Select(c => Choice(c, skippedRewards.Contains(c))).ToArray();
+            .Take(200).Select(c => Choice(c, skippedRewards.Contains(c), sphereFinished)).ToArray();
         if (scope is NCardGridSelectionScreen gridScreen)
             choices = choices.Concat(GridChoices(gridScreen)).ToArray();
         return (controls, choices);

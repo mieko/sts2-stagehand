@@ -151,8 +151,10 @@ Console.WriteLine("Native unowned Know Thy Place preview: Exhaust removed, costs
 var numbers = projection.GetMethod("CardValues", BindingFlags.Static | BindingFlags.NonPublic)
     ?? throw new Exception("Card inspection must expose native structured values");
 static System.Text.Json.JsonElement Project(MethodInfo method, params object[] args) =>
-    System.Text.Json.JsonSerializer.SerializeToElement(method.Invoke(null, args), new System.Text.Json.JsonSerializerOptions {
-        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+    System.Text.Json.JsonSerializer.SerializeToElement(method.Invoke(null, args), new System.Text.Json.JsonSerializerOptions
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+    });
 CardModel NativeCard(Type type)
 {
     var card = (CardModel)Shell(type);
@@ -294,8 +296,11 @@ Console.WriteLine("Native service UI activation: shared clickable handler and ch
 var gameInfo = typeof(Sts2Host).GetMethod("GameInfo", BindingFlags.Static | BindingFlags.NonPublic)!;
 var nativeRelease = new MegaCrit.Sts2.Core.Debug.ReleaseInfo
 {
-    Version = "v0.107.1", Commit = "59260271", Branch = "v0.107.1",
-    Date = DateTime.Parse("2026-06-18T15:43:56-07:00"), MainAssemblyHash = -1718063421
+    Version = "v0.107.1",
+    Commit = "59260271",
+    Branch = "v0.107.1",
+    Date = DateTime.Parse("2026-06-18T15:43:56-07:00"),
+    MainAssemblyHash = -1718063421
 };
 var facts = gameInfo.Invoke(null, [nativeRelease])!;
 if ((string)facts.GetType().GetProperty("Version")!.GetValue(facts)! != nativeRelease.Version
@@ -315,3 +320,25 @@ foreach (var field in new[] { "_dialogueHitbox", "_dialogueContainer", "_current
 if (typeof(MegaCrit.Sts2.Core.Nodes.GodotExtensions.NClickableControl).GetProperty("IsEnabled")?.PropertyType != typeof(bool))
     throw new Exception("Ancient dialogue availability requires the native enabled flag");
 Console.WriteLine("Native Ancient bindings: actual advance hitbox and current-line fields present; no caption matching");
+
+var sphereProjection = typeof(Sts2Host).GetMethod("SphereCellInfo", BindingFlags.Static | BindingFlags.NonPublic)!;
+var sphereCell = new MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereCell(4, 5);
+sphereCell.SetItem((MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereItem)Shell(
+    typeof(MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereItems.CrystalSphereGold)));
+(bool Enabled, object Detail) ProjectCell(bool finished) => ((bool, object))sphereProjection.Invoke(null, [sphereCell, finished])!;
+var activeCell = ProjectCell(false);
+if (!activeCell.Enabled || activeCell.Detail.GetType().GetProperty("RevealedItem")!.GetValue(activeCell.Detail) != null)
+    throw new Exception("An active covered cell is selectable without exposing its hidden item");
+var finishedCell = ProjectCell(true);
+if (finishedCell.Enabled)
+    throw new Exception("A finished Crystal Sphere must not advertise covered cells as actionable");
+if (!(bool)finishedCell.Detail.GetType().GetProperty("Hidden")!.GetValue(finishedCell.Detail)!
+    || (int)finishedCell.Detail.GetType().GetProperty("X")!.GetValue(finishedCell.Detail)! != 4
+    || (int)finishedCell.Detail.GetType().GetProperty("Y")!.GetValue(finishedCell.Detail)! != 5
+    || finishedCell.Detail.GetType().GetProperty("RevealedItem")!.GetValue(finishedCell.Detail) != null)
+    throw new Exception("Finished covered cells must retain public grid coordinates without exposing hidden contents");
+sphereCell.IsHidden = false;
+var revealedCell = ProjectCell(false);
+if (revealedCell.Enabled || (string)revealedCell.Detail.GetType().GetProperty("RevealedItem")!.GetValue(revealedCell.Detail)! != "CrystalSphereGold")
+    throw new Exception("An uncovered cell is inspection data, not another reveal action");
+Console.WriteLine("Crystal Sphere cells: active→finished eligibility, covered-grid retention and hidden-item guard passed");
