@@ -1,5 +1,26 @@
 # Semantic API
 
+`connectSts2()` uses Stagehand's object wrapper registry. The mod registers the
+endpoint with label/type `Sts2`; the exported `sts2Wrappers` also works with a
+generic Stagehand client:
+
+```js
+import { connect } from 'godot-stagehand';
+import { sts2Wrappers } from './sts2.mjs';
+
+const client = await connect(url, {token, wrappers: sts2Wrappers});
+const game = await client.findObject('Sts2');
+```
+
+The factory retains one facade per connection and endpoint so rediscovery and
+decoded object references share FIFO, queue recovery, pacing and spectator state.
+Separate connections retain independent sessions. `connectSts2(url, {client})`
+can install the default StS2 factory on an existing client without replacing its
+other wrappers; it closes a connection on discovery failure only when it created
+that connection. Card/enemy snapshots are ordinary data, not wrapped objects.
+Deploy the mod's matching resource pack before adopting this client; the previous
+generic `game` registration does not identify an StS2 wrapper.
+
 - `decision()` gives the current kind of decision, player HP/block/gold/energy,
   relics/potions, current hand, visible enemies/intents/statuses, readable choices,
   prompt text and travelable next rooms. Disabled choices remain visible.

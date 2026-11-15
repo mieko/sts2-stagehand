@@ -87,6 +87,13 @@ importing it, supporting persistent JS tools that cannot resolve bare ESM names.
 Changing imported JS requires a fresh module graph/kernel; closing a socket does
 not reload code. `game.close()` does not quit the game.
 
+`connectSts2()` installs the StS2 wrapper factory and discovers the registered
+`Sts2` object. When using Stagehand's generic `connect()` directly, pass the
+exported `sts2Wrappers` as its `wrappers` option; then
+`await client.findObject('Sts2')` returns the same semantic facade. Repeated
+references on that connection share its action queue and spectator state. Card,
+enemy and other state snapshots remain plain data.
+
 For a separate read-only watcher, `observer.spectate()` returns the current settled
 frame; subsequent `observer.spectate({after: frame, timeoutMs: 20000})` calls wait
 for a new meaningful position. Print `frame.view`. It does not normalize or drive

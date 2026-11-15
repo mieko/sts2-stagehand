@@ -12,7 +12,7 @@ var _handle := ""
 
 func configure(bridge: Node) -> void:
 	_bridge = bridge
-	_handle = bridge.register_object(self, "Sts2", "game", {
+	_handle = bridge.register_object(self, "Sts2", "Sts2", {
 		"request": request, "state": state, "inspect": inspect_state, "select_card": select_card,
 	}, observe, ["changed"])
 

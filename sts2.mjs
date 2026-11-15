@@ -104,12 +104,34 @@ function batchError(error, results, remaining) {
   return error;
 }
 
+// Rediscovery and decoded references must share the same FIFO and spectator state.
+const facades = new WeakMap();
+export const sts2Wrappers = {
+  Sts2(remote) {
+    let objects = facades.get(remote.client);
+    if (!objects) {
+      objects = new Map();
+      facades.set(remote.client, objects);
+    }
+    if (!objects.has(remote.id)) objects.set(remote.id, new Sts2(remote.client, remote));
+
+    return objects.get(remote.id);
+  },
+};
+
 export async function connectSts2(url, options = {}) {
-  const client = options.client ?? await connect(url, options);
+  const client = options.client ?? await connect(url, {
+    ...options, wrappers: { ...sts2Wrappers, ...options.wrappers },
+  });
+  client.wrappers.Sts2 ??= sts2Wrappers.Sts2;
   try {
-    const descriptor = (await client.objects()).find(item => item.label === 'Sts2');
-    if (!descriptor) throw new Error('The adapter-local Sts2 host is not loaded');
-    return new Sts2(client, client.object(descriptor.id));
+    const game = await client.findObject('Sts2');
+    if (!game) throw new Error('The adapter-local Sts2 host is not loaded');
+    if (!(game instanceof Sts2)) {
+      throw new Error('The host must register the Sts2 type; reload the matching mod/client');
+    }
+
+    return game;
   } catch (error) {
     if (!options.client) client.close();
     throw error;
