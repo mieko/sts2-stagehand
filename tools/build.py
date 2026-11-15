@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-repo = Path(__file__).resolve().parent
+repo = Path(__file__).resolve().parent.parent
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
             parser.error(f'Missing required input: {item}')
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run([
-        'dotnet', 'build', str(repo / 'Stagehand.Sts2.csproj'), '--configuration', 'Release',
+        'dotnet', 'build', str(repo / 'mod/Stagehand.Sts2.csproj'), '--configuration', 'Release',
         '--output', str(output), f'-p:GameDataDir={args.game_data.resolve()}',
         f'-p:BaseIntermediateOutputPath={repo / "obj"}/', '-p:RuntimeFrameworkVersion=9.0.14',
     ], check=True)
@@ -37,7 +37,7 @@ def main():
             'config_version=5\n[application]\nconfig/name="Stagehand Pack"\n'
         )
         subprocess.run([
-            args.godot, '--headless', '--path', str(project), '--script', str(repo / 'pack.gd'),
+            args.godot, '--headless', '--path', str(project), '--script', str(repo / 'tools/pack.gd'),
             '--', str(addon), str(output / 'RuntimeControl.pck'),
         ], check=True)
     print(f'Built mod artifacts in {output}; nothing deployed.')

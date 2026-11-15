@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ServiceSts2 as Sts2 } from './support/service.mjs';
-import { Sts2 as ClientSts2 } from '../sts2.mjs';
+import { Sts2 as ClientSts2 } from '../client/sts2.mjs';
 import { fixture, uiFixture, button } from './support/fixtures.mjs';
 import { EventEmitter } from 'node:events';
 

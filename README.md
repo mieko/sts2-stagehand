@@ -1,14 +1,24 @@
 # StS2 Stagehand
 
 A semantic JavaScript API and native mod for Slay the Spire 2 single-player.
-Inspect player-visible cards, effects, enemies, map/choices and progression; play
-through the game's real operations with queued actions and completion-aware
-results. It uses the separate [Stagehand](https://github.com/mieko/stagehand)
-addon/client. No MCP server or provider-specific runtime is required.
+Read player-visible state and play through native game actions, with ordered
+batches and completion-aware results. Uses [Stagehand](https://github.com/mieko/stagehand);
+no MCP server, Codex or provider-specific runtime required.
+
+- [API reference](docs/api.md): gameplay, inspection, choices, recovery and spectators.
+- [Service operations](docs/operations.md): language-neutral wire contract.
 
 ## Source layout and dependencies
 
-Clone the consumer with its pinned Stagehand submodule:
+| Directory | Contents |
+| --- | --- |
+| `mod/` | Native C# binding, GDScript registration and mod manifest. |
+| `client/` | Semantic JavaScript API, presentation and local connection helper. |
+| `tools/` | Build, resource packing, isolated launch and development proof scripts. |
+| `test/` | Offline service, client, native model and registration fixtures. |
+| `stagehand/` | Pinned generic addon/client dependency. |
+
+Clone with the pinned Stagehand submodule:
 
 ```sh
 git clone --recurse-submodules git@github.com:mieko/sts2-stagehand.git
@@ -16,163 +26,34 @@ cd sts2-stagehand
 npm ci
 ```
 
-```text
-sts2-stagehand/
-  stagehand/       # pinned reusable addon, client and standalone fixtures
-  sts2.mjs         # this game's semantic client
-```
-
-The Git submodule records the exact Stagehand revision. Both the npm dependency
-`file:./stagehand` and the default mod build use that checkout. For an existing
-clone, run `git submodule update --init --recursive` before `npm ci`.
-This consumer's mod uses .NET and the game's own assemblies; do not ship game DLLs
-with the source.
-
-## Connect and play
-
-`local.mjs` reads a private session produced by the isolated launcher. Select the
-instance explicitly or keep an ignored development symlink:
-
-```sh
-mkdir -p .local
-ln -s "$ISOLATED_INSTANCE" .local/instance
-```
-
-In a persistent JS environment, replace the absolute import path with your checkout,
-import/connect once, then retain `game` for subsequent calls:
-
-```js
-var { connectLocal } = await import('/absolute/path/to/sts2-stagehand/local.mjs');
-var game = await connectLocal();
-```
-
-Later, in a separate invocation:
-
-```js
-var d = await game.decision();
-console.log(game.present(d));
-```
-
-```js
-var result = await game.playCards([
-  {card: d.combat.hand[0], target: d.combat.enemies[0]},
-  'Defend',
-], {endTurn: true});
-console.log(game.present(result));
-```
-
-For ordinary rewards, `await game.collectLoot({potions: true})` claims gold and
-requested potions, then opens the ordinary card offer. Relics require an explicit
-`relics: [rewardObject]` list; unrequested/special rewards remain available. It stops
-at a full inventory or new choice and never picks a card for you. Full inventory
-returns `choice_required` with applied progress, allowing explicit inventory
-handling without queue recovery. `game.present(result)`
-is the compact, pure view of an existing outcome—no extra read or normalization.
-It keeps next rooms and live relic counters; `{map: true, inventory: true}` opts
-into the full graph and static inventory. `{diagnostics: true}` restores detailed
-card metadata and inspection controls. Defaults keep actual costs, modifiers,
-playability failures, copy counts and changing resources without repeating absent
-fields or preview provenance. Rich results and histories remain unchanged.
-
-Choose actual legal cards/targets from the current observation. Exact names work
-when unambiguous; pass a specific object for variants. `buy([itemA, itemB])` and
-other batches execute in the mod in order, without another model turn per item.
-Stop and inspect a new choice or failure; successful earlier actions remain applied.
-Results retain each step’s historical state as well as the final state; `present()`
-summarizes without printing those snapshots. Gameplay waits scale with the batch,
-independently of connection/RPC deadlines. After an interrupted call,
-`await game.recover()` retrieves the submitted operation’s outcome without replay;
-inspect it before explicitly resuming a stopped queue.
-
-Ancient conversations normally return the current speech and one advance choice.
-For a bot that wants to advance them automatically, opt in once per connection:
-`game.setDialogueAutoskip(true)`. It stops at actual offers and retains speech
-in the outcome; chest and other forced UI settlement is independent.
-
-To compare an offered card with its upgrade before choosing or buying it, use
-`await game.inspectCard(offer, {upgrades: true})`. This passive read uses the native
-detached preview and leaves the offered card unchanged; the returned `upgrade`
-contains the alternative when the card can be upgraded.
-
-For ordinary Node, use `import {connectLocal} from './local.mjs'`. An explicit
-connection is also available through `connectSts2(url, {token, WebSocket})` in
-`sts2.mjs`. No Codex dependency. `local.mjs` supplies `ws` when the environment lacks
-a global WebSocket. The semantic module resolves its local core package before
-importing it, supporting persistent JS tools that cannot resolve bare ESM names.
-Changing imported JS requires a fresh module graph/kernel; closing a socket does
-not reload code. `game.close()` does not quit the game.
-
-`connectSts2()` installs the StS2 wrapper factory and discovers the registered
-`Sts2` object. When using Stagehand's generic `connect()` directly, pass the
-exported `sts2Wrappers` as its `wrappers` option; then
-`await client.findObject('Sts2')` returns the same semantic facade. Repeated
-references on that connection share its action queue and spectator state. Card,
-enemy and other state snapshots remain plain data.
-
-For a separate read-only watcher, `observer.spectate()` returns the current settled
-frame; subsequent `observer.spectate({after: frame, timeoutMs: 20000})` calls wait
-for a new meaningful position. An idle timeout returns null; keep the previous
-frame as the continuation. Print a returned frame's `view`. It does not normalize or drive
-the UI, and a real choice remains visible while its original action is pending.
-Keep the frame object in the same persistent JS session. Settled positions do
-not claim another client's whole local queue has ended.
-
-See [the API](docs/api.md) for semantic state, effects/enchantments/afflictions,
-queue and failure semantics, potions/shopkeepers, rewards/events and explicit
-results/epoch/unlock handling. `state()`, `deck()`, `inspectCard()` and `piles()` are passive reads;
-`decision()`/`ready()` may advance documented presentation-only UI.
-
-## How the integration fits together
-
-The native mod creates a Stagehand bridge, registers one game object, and supplies
-callbacks for observing state and executing native operations. The external client
-wraps that object with the semantic API; it uses the ordinary generic client for
-discovery, calls, subscriptions and screenshots. Its generic client remains
-available for explicit input fallback.
-
-| File | Responsibility |
-| --- | --- |
-| [Entry.cs](Entry.cs) | Attach and enable the runtime bridge; clean it up if installation fails. |
-| [sts2.gd](sts2.gd) | Register `Sts2`, its methods, observation callback and `changed` event. |
-| [Sts2Host.cs](Sts2Host.cs) | Address current game objects, read active UI, execute native actions and report completion. |
-| [WorkflowService.cs](WorkflowService.cs) | Execute bounded plans, choices and forced settlement for every client language. |
-| [ModelProjection.cs](ModelProjection.cs) | Turn native models into public card, effect and status facts without owning game objects. |
-| [sts2.mjs](sts2.mjs) | Install the wrapper factory and expose queued semantic operations. |
-| [decision.mjs](decision.mjs), [present.mjs](present.mjs), [spectator.mjs](spectator.mjs) | Pure decision/presentation transforms and settled-observation comparisons. |
-
-For another Godot game, the small registration in `sts2.gd` and the wrapper
-factory in `sts2.mjs` are the integration pattern. The native game knowledge lives
-in this consumer, alongside the facade that names useful operations for clients.
-
-See [service operations](docs/operations.md) for the language-neutral wire API,
-completion, partial results and client lifetime semantics.
+For an existing clone, run `git submodule update --init --recursive` before
+`npm ci`. Both the npm dependency `file:./stagehand` and the default mod build use
+that checkout. Game DLLs are local prerequisites, not distributable source.
 
 ## Build the mod
 
-Prerequisites: Python 3, .NET SDK 10 and a Godot 4.5 executable for resource packing.
-The managed host targets net9.0 and references `sts2.dll`/`GodotSharp.dll` from the
-selected game version. The packer uses an empty temporary project, never replaces
-the game pack/settings and does not launch the game.
+Requires Python 3, .NET SDK 10 and Godot 4.5 for resource packing. The net9.0 host
+references `sts2.dll` and `GodotSharp.dll` from the selected game:
 
 ```sh
-python3 build.py \
+python3 tools/build.py \
   --game-data "$GAME_DATA_DIR" \
   --godot "$GODOT45"
 ```
 
-For a macOS app copy, `GAME_DATA_DIR` is its
-`Contents/Resources/data_sts2_macos_arm64` directory. Artifacts go to ignored
-`build/` by default; `--core` and `--output` accept explicit alternate directories.
-Building writes source-local ignored `obj/` and output files, but deploys nothing.
-The source/load mechanism uses the native mod loader and `ModInitializerAttribute`;
-no Harmony, BaseLib or engine patch is needed.
+For a macOS app copy, `GAME_DATA_DIR` is `Contents/Resources/data_sts2_macos_arm64`.
+Output defaults to ignored `build/`; `--core` selects another Stagehand checkout
+and `--output` another output directory. The build writes ignored `obj/`, packs
+resources in a temporary project, and neither launches, modifies nor deploys to
+the game. Loading uses the native mod loader and `ModInitializerAttribute`, without
+Harmony, BaseLib or engine patches.
 
 ## Run an isolated copy
 
-Keep the Steam app, normal saves and Steam Cloud separate from automation:
+Protect the Steam app, normal saves and Steam Cloud. Use a separate app and profile:
 
 1. Copy the app into `$ISOLATED_INSTANCE/SlayTheSpire2.app`.
-2. Inside that copy, create `Contents/MacOS/override.cfg`:
+2. Create `Contents/MacOS/override.cfg` inside the copy:
 
    ```ini
    [application]
@@ -180,28 +61,61 @@ Keep the Steam app, normal saves and Steam Cloud separate from automation:
    config/custom_user_dir_name="stagehand-sts2-your-instance"
    ```
 
-   Give each disposable instance a distinct name. Optional display settings may
-   put the copy in a window; they are not required by the connector.
-3. Build this mod, then launch with the explicit directory or `.local/instance`:
+   Give each instance a distinct name, then keep it unchanged across launches.
+3. Build the mod and launch:
 
    ```sh
-   python3 launch-isolated.py --directory "$ISOLATED_INSTANCE"
+   python3 tools/launch-isolated.py --directory "$ISOLATED_INSTANCE"
    ```
 
-The launcher copies this repo's built DLL/PCK and manifest into the **copy's** mod
-folder, passes `--force-steam=off`, selects a fresh private token and writes a
-mode-600 `session.json` plus timestamped logs under the isolated directory. It
-refuses to replace artifacts while the previously launched PID still exists.
-Quit the isolated app normally before redeploying. `--artifacts` selects another
-build directory. Do not point it at your Steam installation.
+The launcher installs the built DLL/PCK/manifest into the copy, uses
+`--force-steam=off`, and writes a private token, mode-600 `session.json` and timestamped
+logs. `--artifacts` selects another build directory. Never point it at Steam's app.
+Quit the copy normally before redeploying: the launcher refuses while its previous
+PID exists. Coordinate control/reloads with anyone using the instance; do not
+restart an evaluation run just to install a source fix.
 
-On the first mod-consent launch the game may save consent and exit; launch the copy
-again to load the mod. If other mods are present, manage them only in the copy.
-With no `STAGEHAND_TOKEN`, the initializer leaves the listener disabled.
-The isolated profile is persistent development state: keep the same override
-user-directory name across launches to retain runs and character/unlock progression.
-Rebuilding or relaunching does not reset it. Do not delete it after evaluation.
-Tokens, logs, game files, saves and generated artifacts are not repository content.
+On first mod consent, the game may save consent and exit; launch the copy again.
+Manage other mods only in the copy. Without `STAGEHAND_TOKEN`, the listener stays
+disabled. Adopt matching DLL, PCK and client together.
+
+The isolated profile persists runs and unlocks across rebuilds/relaunches; do not
+delete it after evaluation. Existing `runtime-control-sts2-` profile names remain
+supported alongside `stagehand-sts2-`. The mod ID, folder and artifacts remain
+`RuntimeControl` for saved-run compatibility; its display name is Stagehand.
+Keep tokens, logs, game files, saves and build products out of Git.
+
+## Connect and play
+
+`client/local.mjs` reads the launcher's private session. In a persistent JS REPL, import
+and connect once using your checkout and instance paths:
+
+```js
+var { connectLocal } = await import('/absolute/path/to/sts2-stagehand/client/local.mjs');
+var game = await connectLocal({directory: '/absolute/path/to/isolated-instance'});
+var d = await game.decision();
+console.log(game.present(d));
+```
+
+Alternatively, set an ignored default for both connector and launcher:
+
+```sh
+mkdir -p .local
+ln -s "$ISOLATED_INSTANCE" .local/instance
+```
+
+Then use `connectLocal()` and omit the launcher's `--directory`. Ordinary Node can
+use `import {connectLocal} from './client/local.mjs'`; `client/local.mjs` supplies `ws` if needed.
+Explicit connections use `connectSts2(url, {token, WebSocket})` from `sts2-stagehand`.
+Changed imports need a fresh module graph/kernel; closing a socket does not reload
+code. `game.close()` disconnects without quitting the game.
+
+Continue with the [REPL examples and method reference](docs/api.md). Use observed
+legal cards/choices; inspect each returned decision. Batches retain successful
+steps when interrupted: use `game.recover()`, not blind replay.
+`decision()`/`ready()` can advance documented presentation UI; use passive
+`state()`/`deck()`/`inspectCard()`/`piles()` or [spectator frames](docs/api.md#passive-spectator-frames)
+when watching another player's run.
 
 ## Tests and compatibility
 
@@ -210,67 +124,54 @@ npm test
 npm run test:host
 ```
 
-For fast presenter-only iteration, use `npm run test:presentation` (no game or
-managed test-service build).
+| Check | Scope / prerequisites |
+| --- | --- |
+| `npm test` | JS API, managed workflow service/fixture and offline Python launcher tests with fake native ports/apps. Requires .NET SDK 10; no game or engine. |
+| `npm run test:host` | Production unordered-card ordering helper in pure C#; .NET 10, no game DLLs. |
+| `npm run test:presentation` | Presenter-only JS checks; no game or managed build. |
+| `npm run test:registration -- --godot "$GODOT45"` | Actual GDScript registration in a temporary game-free project, including passive status-read isolation. |
 
-The JS suite groups connection, inspection, actions, presentation and spectator
-behavior under `test/`; `npm test` also runs the offline Python launcher checks.
-These use temporary fake app executables, not a game installation. The JS checks
-cover queues, completion, explicit choices and partial progress. They run the real
-managed workflow service through a test-only JSON fixture with fake native ports.
-`npm test` therefore also needs .NET SDK 10; it runs the direct service checks and
-builds that fixture before the JS tests. No game or engine runs in these checks.
-The separate `test:host` pure C# test links the production unordered-card ordering
-helper and needs no game DLLs or running game; it uses .NET 10. Build the complete host against the selected
-game assemblies after managed changes. Live game checks must use a disposable
-isolated instance and be coordinated with its user.
-
-Check the actual GDScript registration in a temporary game-free project with
-`npm run test:registration -- --godot "$GODOT45"`. This also verifies that status
-reads cannot enter the mutation callback.
-
-After building the host, check native models and selection ownership against the selected game
-assemblies without launching a game:
+After managed changes, build against the selected game's assemblies. Then check
+native models and selection ownership without launching the game:
 
 ```sh
 npm run test:selection -- -p:GameDataDir="$GAME_DATA_DIR"
 ```
 
-This uses managed shells of the actual game types to check eligible-card lists,
-detached previews and model preservation, numeric values/context, costs, facing
-and ending phases. It creates no native nodes, loads no engine, reads no saves
-and makes no claim to replace live game qualification.
-Game assemblies and build outputs remain ignored local prerequisites.
-When qualifying an alternate build output, also pass
-`-p:HostBuildDir=/absolute/path/to/output` to select that host assembly.
+For another host build, add `-p:HostBuildDir=/absolute/path/to/output`. This checks
+eligible cards, detached previews/model preservation, numeric context, costs,
+facing and ending phases using game-type shells: no native nodes, engine or saves.
+It does not replace live qualification. Coordinate live tests in an isolated
+app/profile; keep game assemblies and outputs ignored.
 
-The binding has been exercised on Steam v0.107.1 / MegaDot 4.5.1-m.12, macOS arm64,
-including complete normal three-act wins with all five main-branch characters, ordinary between-room decisions,
-results, explicit epochs/unlocks and returning to a usable menu. This is concrete
-coverage, not exhaustive parity. Rare bundle screens
-and Fake Merchant potion combat require more live qualification. Co-op,
-Daily and Custom setup are outside the current single-player API.
+Exercised on Steam v0.107.1 / MegaDot 4.5.1-m.12, macOS arm64, including normal
+three-act wins with all five main-branch characters, between-room decisions,
+results, explicit epochs/unlocks and return to menu. Rare bundle screens and Fake
+Merchant potion combat need more live qualification. Co-op, Daily and Custom setup
+are outside this API. Private game UI fields may require adapter updates after a
+game release. Unsupported screens have explicit `game.client` input/inspection;
+no hidden RNG, future rewards or shuffled draw order are exposed.
 
-Some game UI fields are private managed implementation details; a game update may
-require adapter changes. The generic addon remains independent. Unknown screens
-can still be inspected/controlled through `game.client` primitives. No hidden RNG,
-future rewards or shuffled draw order are part of the semantic API.
+## How the integration fits together
 
-Mod loading references: [Alchyr mod setup](https://github.com/Alchyr/ModTemplate-StS2/wiki/Setup)
-and [the native inspector initializer](https://github.com/elliotttate/sts2-modding-mcp/blob/main/explorer_mod/src/GodotExplorer.cs).
+The mod registers one `Sts2` object on the generic Stagehand bridge. Native game
+knowledge stays here; Stagehand supplies discovery, transport, subscriptions,
+screenshots and input.
+
+| File | Responsibility |
+| --- | --- |
+| [Entry.cs](mod/Entry.cs) | Bridge installation and cleanup. |
+| [sts2.gd](mod/sts2.gd) | Object, methods, observation and `changed` registration. |
+| [Sts2Host.cs](mod/Sts2Host.cs) | Game objects/UI, native actions and completion. |
+| [WorkflowService.cs](mod/WorkflowService.cs) | Ordered plans, choices and forced settlement. |
+| [ModelProjection.cs](mod/ModelProjection.cs) | Public model facts without object ownership. |
+| [sts2.mjs](client/sts2.mjs) | Semantic facade and local FIFO. |
+| [decision.mjs](client/decision.mjs), [present.mjs](client/present.mjs), [spectator.mjs](client/spectator.mjs) | Decision/presentation transforms and settled-position comparison. |
 
 ## Recovering an unresponsive instance
 
-A game/native-runtime stall can stop all RPCs, including passive reads. A client
-timeout does not cancel or undo an accepted action. Preserve the instance logs and
-bounded native stack samples before recovery when practical; do not blindly retry
-the batch. Quit only the isolated copy, relaunch it with the same persistent user
-directory, then use the game's native Continue and inspect the actual restored
-state. The save determines recovery position; already completed in-memory actions
-may not have been saved. Keep saved progression intact, and coordinate control and
-reloads when another user or agent is playing.
-
-The StS2 mod ID, installed folder and artifact names remain `RuntimeControl` for
-compatibility with existing modded runs. The display name is Stagehand. Keep an
-existing profile's custom-user-directory name unchanged; the launcher accepts its
-`runtime-control-sts2-` prefix as well as `stagehand-sts2-` for new instances.
+A native stall can block even passive RPCs. A timeout does not cancel an accepted
+action. Preserve logs and bounded native stack samples when practical, then quit
+only the isolated copy and relaunch with the **same user directory**. Use native
+Continue and inspect the restored state: completed in-memory actions may not have
+reached the save. Preserve progression and coordinate recovery with other players.

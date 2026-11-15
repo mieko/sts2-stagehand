@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { ServiceSts2 as Sts2 } from './support/service.mjs';
 import { fixture, uiFixture, button } from './support/fixtures.mjs';
 import { EventEmitter } from 'node:events';
-import { isSettledObservation, observationBoundary } from '../spectator.mjs';
+import { isSettledObservation, observationBoundary } from '../client/spectator.mjs';
 
 test('a service work-order settles at its own stop, including inventory choices without a native action', () => {
   const position = { screen: 'NRewardsScreen', ready: true, choices: [] };

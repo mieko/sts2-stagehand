@@ -8,6 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Workflow.cs" />
-    <Compile Include="../WorkflowService.cs" Link="WorkflowService.cs" />
+    <Compile Include="../mod/WorkflowService.cs" Link="WorkflowService.cs" />
   </ItemGroup>
 </Project>

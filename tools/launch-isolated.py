@@ -43,9 +43,9 @@ def has_isolated_userdir(settings):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--directory', type=Path, default=Path(__file__).resolve().parent / '.local/instance',
+        '--directory', type=Path, default=Path(__file__).resolve().parent.parent / '.local/instance',
     )
-    parser.add_argument('--artifacts', type=Path, default=Path(__file__).resolve().parent / 'build')
+    parser.add_argument('--artifacts', type=Path, default=Path(__file__).resolve().parent.parent / 'build')
     args = parser.parse_args()
     root = args.directory.resolve()
     app = root / 'SlayTheSpire2.app'
@@ -71,7 +71,7 @@ def main():
     mod.mkdir(parents=True, exist_ok=True)
     for name in ('RuntimeControl.dll', 'RuntimeControl.pck'):
         shutil.copy2(args.artifacts / name, mod / name)
-    shutil.copy2(Path(__file__).with_name('RuntimeControl.json'), mod / 'RuntimeControl.json')
+    shutil.copy2(Path(__file__).resolve().parent.parent / 'mod/RuntimeControl.json', mod / 'RuntimeControl.json')
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     log_name = f'game-stdout-{stamp}.log'
     token = secrets.token_hex(32)

@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='sts2-stagehand-registration-') as tempo
         'config/use_custom_user_dir=true\n'
         f'config/custom_user_dir_name="stagehand-tests/{project.name}"\n'
     )
-    shutil.copy2(repo / 'sts2.gd', project / 'sts2.gd')
+    shutil.copy2(repo / 'mod/sts2.gd', project / 'sts2.gd')
     shutil.copy2(repo / 'test/registration.gd', project / 'registration.gd')
     try:
         subprocess.run([

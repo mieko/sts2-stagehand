@@ -1,5 +1,5 @@
 // Opens Settings and returns to the menu in a running qualification copy.
-// STAGEHAND_URL=ws://127.0.0.1:PORT STAGEHAND_TOKEN=... node prove.mjs
+// STAGEHAND_URL=ws://127.0.0.1:PORT STAGEHAND_TOKEN=... node tools/prove.mjs
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { connect, GodotValue } from 'godot-stagehand';

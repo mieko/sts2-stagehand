@@ -6,7 +6,7 @@
     "ws": "8.23.0",
     "godot-stagehand": "file:./stagehand"
   },
-  "exports": "./sts2.mjs",
+  "exports": "./client/sts2.mjs",
   "scripts": {
     "test": "npm run test:workflows && node --test test/*.test.mjs && npm run test:launcher",
     "test:presentation": "node --test test/presentation.test.mjs",

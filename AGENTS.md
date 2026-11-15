@@ -1,18 +1,18 @@
 # Agent directions
 
-Read README.md and docs/api.md before editing. This repository owns the StS2
-managed binding and semantic external client. The generic addon/client is a
-separate dependency; do not copy StS2 policy into it or duplicate its transport.
+Read README.md and docs/api.md before editing. This repo owns the StS2 managed
+binding and semantic client; keep game policy out of the separate generic
+addon/client and do not duplicate its transport.
 
-Use real game descriptions, visible state and native action paths. Never expose
-hidden draw order, future RNG/rewards or use direct state edits to fake legal
-operations. Acknowledged actions are not necessarily finished. Preserve FIFO
-mutation, partial progress and explicit choice/epoch/tutorial boundaries.
+Use game descriptions, visible state and native actions. Never expose hidden draw
+order or future RNG/rewards, or fake legal operations with direct state edits.
+Preserve FIFO mutations, partial progress and explicit choice/epoch/tutorial
+boundaries. Acceptance is not completion.
 
-Run `npm test` and `npm run test:host`; build against the selected game's assemblies
-when managed code changes. Coordinate live-instance/client reloads with its user.
-Do not restart an evaluation run merely to install a source fix. Use an isolated
-app copy/user directory with Steam off; normal saves and the Steam app are protected.
+Run `npm test` and `npm run test:host`. After managed changes, build against the
+selected game's assemblies. Coordinate live-instance/client reloads with its user;
+never restart an evaluation run merely to install a source fix. Use an isolated
+app copy/profile with Steam off; protect normal saves and the Steam app.
 
 Keep plans/checklists/review diaries, secrets, decompiled game sources, game assets,
-saves and local build products outside Git. Commit or publish only on request.
+saves and build products out of Git. Commit or publish only on request.

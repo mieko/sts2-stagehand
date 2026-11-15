@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 test('compact output retains native parent correlation without dumping history or service tracking', async () => {
-  const { present } = await import('../present.mjs');
+  const { present } = await import('../client/present.mjs');
   const value = {
     status: 'choice_required',
     operation: 'batch-id',
@@ -30,7 +30,7 @@ test('compact output retains native parent correlation without dumping history o
 });
 
 test('compact recovery marks retained state as historical when a new position could not be observed', async () => {
-  const { present } = await import('../present.mjs');
+  const { present } = await import('../client/present.mjs');
   const view = present({
     status: 'unconfirmed',
     stateScope: 'last_observed',
@@ -40,7 +40,7 @@ test('compact recovery marks retained state as historical when a new position co
   assert.equal(view.status, 'unconfirmed');
   assert.equal(view.player.gold, 30);
 });
-import { Sts2 } from '../sts2.mjs';
+import { Sts2 } from '../client/sts2.mjs';
 import { button } from './support/fixtures.mjs';
 
 test('ordinary card views omit absent metadata while diagnostics preserve its meaning and raw history', () => {
@@ -241,7 +241,7 @@ test('selection views hide incidental UI but retain meaningful blocked choices a
 });
 
 test('concise presenter groups real copies, preserves variants and includes prices and incoming uncertainty', async () => {
-  const { present } = await import('../sts2.mjs');
+  const { present } = await import('../client/sts2.mjs');
   const dazed = { name: 'Dazed', description: 'Unplayable. Ethereal.', cost: 0, canPlay: false };
   const raw = {
     kind: 'combat',
@@ -292,7 +292,7 @@ test('concise presenter groups real copies, preserves variants and includes pric
 });
 
 test('the presenter preserves native evoke-next positions without spatial reinterpretation', async () => {
-  const { present } = await import('../sts2.mjs');
+  const { present } = await import('../client/sts2.mjs');
   const orbs = [
     { name: 'Lightning', queuePosition: 1, evokeNext: true },
     { name: 'Dark', queuePosition: 2, evokeNext: false },
@@ -313,7 +313,7 @@ test('the presenter preserves native evoke-next positions without spatial reinte
 });
 
 test('compact map/inventory options retain next rooms, combat counters and offer effect definitions', async () => {
-  const { present } = await import('../present.mjs');
+  const { present } = await import('../client/present.mjs');
   const map = [{ ref: 'r', col: 0, row: 1, type: 'Shop', leadsTo: [], state: 'Travelable' }];
   const raw = {
     kind: 'map',
@@ -456,7 +456,7 @@ test('pure compact outcomes retain companions and related-card facts without dup
 });
 
 test('compact Timeline summarizes history and retains every new explicit epoch decision', async () => {
-  const { present } = await import('../present.mjs');
+  const { present } = await import('../client/present.mjs');
   const epochs = ['inspect_epoch', 'locked_epoch', 'reveal_epoch'].map((kind, i) => ({
     ref: String(i),
     label: kind,
@@ -475,7 +475,7 @@ test('compact Timeline summarizes history and retains every new explicit epoch d
 });
 
 test('compact sphere shows each visible cell once, full revealed items separately from fragments', async () => {
-  const { present } = await import('../sts2.mjs');
+  const { present } = await import('../client/sts2.mjs');
   const cells = Array.from({ length: 121 }, (_, i) => ({
     ref: 'cell' + i,
     kind: 'divine_cell',
@@ -504,7 +504,7 @@ test('compact sphere shows each visible cell once, full revealed items separatel
 });
 
 test('compact combat retains actionable context and material choice without repeated effect/relic prose', async () => {
-  const { present } = await import('../sts2.mjs');
+  const { present } = await import('../client/sts2.mjs');
   const card = {
     ref: 'c',
     name: 'Dazed',
@@ -546,7 +546,7 @@ test('compact combat retains actionable context and material choice without repe
 });
 
 test('deck snapshot comparison preserves distinct duplicate copies across combat refs', async () => {
-  const { deckChanges } = await import('../cards.mjs');
+  const { deckChanges } = await import('../client/cards.mjs');
   const before = [
     { ref: 'old1', deckRef: 'deck:1', name: 'Strike', description: 'Deal6.' },
     { ref: 'old2', deckRef: 'deck:2', name: 'Strike', description: 'Deal6.' },

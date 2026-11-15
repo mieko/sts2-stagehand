@@ -2,7 +2,7 @@ import { after } from 'node:test';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { Sts2 } from '../../sts2.mjs';
+import { Sts2 } from '../../client/sts2.mjs';
 
 // Cross-runtime fixture: native reads/actions are fakes, but sequencing and
 // settlement execute in the production C# service over JSON, not copied JS rules.

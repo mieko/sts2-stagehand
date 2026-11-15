@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Sts2, connectSts2 } from '../sts2.mjs';
+import { Sts2, connectSts2 } from '../client/sts2.mjs';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);

@@ -20,7 +20,7 @@ class LauncherIsolationTest(unittest.TestCase):
             for name in ("RuntimeControl.dll", "RuntimeControl.pck"):
                 (artifacts / name).write_bytes(b"test artifact")
             result = subprocess.run(
-                [sys.executable, str(pathlib.Path(__file__).parents[1] / "launch-isolated.py"),
+                [sys.executable, str(pathlib.Path(__file__).parents[1] / "tools/launch-isolated.py"),
                  "--directory", str(root), "--artifacts", str(artifacts)],
                 capture_output=True, text=True, timeout=5,
             )

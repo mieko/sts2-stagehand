@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { connectSts2 } from './sts2.mjs';
 
 const require = createRequire(import.meta.url);
-const defaultDirectory = fileURLToPath(new URL('./.local/instance/', import.meta.url));
+const defaultDirectory = fileURLToPath(new URL('../.local/instance/', import.meta.url));
 
 export async function connectLocal({
   directory = defaultDirectory,
@@ -15,7 +15,8 @@ export async function connectLocal({
   const session = JSON.parse(await readFile(`${directory}/session.json`, 'utf8'));
   let url = session.url;
   if (!url) {
-    if (!session.log) throw new Error('Session has no URL/log. Relaunch with launch-isolated.py.');
+    if (!session.log)
+      throw new Error('Session has no URL/log. Relaunch with tools/launch-isolated.py.');
 
     const deadline = Date.now() + waitMs;
     let port;

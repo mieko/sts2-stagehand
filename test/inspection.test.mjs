@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Sts2 } from '../sts2.mjs';
+import { Sts2 } from '../client/sts2.mjs';
 import { EventEmitter } from 'node:events';
 
 test('game release info is a passive native inspection, separate from engine metadata', async () => {
