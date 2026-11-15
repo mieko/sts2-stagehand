@@ -1,0 +1,15 @@
+{
+  "name": "sts2-stagehand",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ws": "8.23.0",
+    "godot-stagehand": "file:../stagehand"
+  },
+  "exports": "./sts2.mjs",
+  "scripts": {
+    "test": "node --test sts2.test.mjs",
+    "test:host": "dotnet run --project test/PublicCardList.test.csproj",
+    "test:selection": "dotnet run --project test/SelectionNative.test.csproj"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "RuntimeControl",
+  "name": "Stagehand for StS2",
+  "author": "Mike",
+  "description": "Stagehand runtime inspection and semantic StS2 control.",
+  "version": "0.1.0",
+  "has_pck": true,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}

@@ -1,0 +1,8 @@
+node_modules/
+bin/
+obj/
+build/
+.local/
+.godot/
+.DS_Store
+__pycache__/
