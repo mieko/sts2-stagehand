@@ -8,9 +8,12 @@
   },
   "exports": "./sts2.mjs",
   "scripts": {
-    "test": "node --test test/*.test.mjs && npm run test:launcher",
+    "test": "npm run test:workflows && node --test test/*.test.mjs && npm run test:launcher",
+    "test:presentation": "node --test test/presentation.test.mjs",
     "test:host": "dotnet run --project test/PublicCardList.test.csproj",
     "test:selection": "dotnet run --project test/SelectionNative.test.csproj",
-    "test:launcher": "python3 -m unittest discover -s test -p '*_test.py'"
+    "test:launcher": "python3 -m unittest discover -s test -p '*_test.py'",
+    "test:workflows": "dotnet run --project test/Workflow.test.csproj && dotnet build test/WorkflowBridge.test.csproj --output test/bin/WorkflowBridge --verbosity quiet",
+    "test:registration": "python3 test/registration.py"
   }
 }

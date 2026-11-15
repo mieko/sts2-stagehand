@@ -61,6 +61,17 @@ if ((bool)awaitsChoice.Invoke(null, [null])! || (bool)awaitsChoice.Invoke(null, 
 
 Console.WriteLine("Native card-choice boundaries: five real screens recognized, absent/non-screen rejected");
 
+foreach (var mode in Enum.GetValues<MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand.Mode>())
+{
+    var hand = Shell(typeof(MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand));
+    Set(hand, "_currentMode", mode);
+    var expected = mode is MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand.Mode.SimpleSelect
+        or MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand.Mode.UpgradeSelect;
+    if ((bool)awaitsChoice.Invoke(null, [hand])! != expected)
+        throw new Exception($"Native hand-choice boundary was classified incorrectly: {mode}");
+}
+Console.WriteLine("Native hand selection: SimpleSelect/UpgradeSelect recognized, None/Play rejected");
+
 // Comparison IDs describe permanent-deck model identity, independently of the
 // action references that reset at a combat boundary.
 var host = Shell(typeof(Sts2Host));
@@ -269,3 +280,38 @@ foreach (var (animating, next, menu, board, earned, expected) in new[] {
         throw new Exception("Incorrect native result interaction phase: " + expected);
 }
 Console.WriteLine("Native ending phase: outcome, score animation, earned epochs, summary, leaderboard and transition passed");
+
+foreach (var (type, method) in new[] {
+    (typeof(MegaCrit.Sts2.Core.Nodes.GodotExtensions.NClickableControl), "ForceClick"),
+    (typeof(MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectButton), "Select") })
+{
+    var activate = type.GetMethod(method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    if (activate == null || activate.GetParameters().Length != 0)
+        throw new Exception($"Native service activation is unavailable: {type.Name}.{method}()");
+}
+Console.WriteLine("Native service UI activation: shared clickable handler and character selection method present");
+
+var gameInfo = typeof(Sts2Host).GetMethod("GameInfo", BindingFlags.Static | BindingFlags.NonPublic)!;
+var nativeRelease = new MegaCrit.Sts2.Core.Debug.ReleaseInfo
+{
+    Version = "v0.107.1", Commit = "59260271", Branch = "v0.107.1",
+    Date = DateTime.Parse("2026-06-18T15:43:56-07:00"), MainAssemblyHash = -1718063421
+};
+var facts = gameInfo.Invoke(null, [nativeRelease])!;
+if ((string)facts.GetType().GetProperty("Version")!.GetValue(facts)! != nativeRelease.Version
+    || (string)facts.GetType().GetProperty("Commit")!.GetValue(facts)! != nativeRelease.Commit
+    || (int)facts.GetType().GetProperty("MainAssemblyHash")!.GetValue(facts)! != nativeRelease.MainAssemblyHash)
+    throw new Exception("Game release metadata must preserve the native installed-game facts");
+var unavailable = gameInfo.Invoke(null, [null])!;
+if ((bool)unavailable.GetType().GetProperty("Available")!.GetValue(unavailable)!
+    || unavailable.GetType().GetProperty("Version")!.GetValue(unavailable) != null)
+    throw new Exception("Absent game metadata must remain explicitly unavailable");
+Console.WriteLine("Native game release metadata: version, commit/hash and explicit unavailability preserved");
+
+var ancientLayout = typeof(MegaCrit.Sts2.Core.Nodes.Events.NAncientEventLayout);
+foreach (var field in new[] { "_dialogueHitbox", "_dialogueContainer", "_currentDialogueLine", "_fakeNextButton" })
+    if (ancientLayout.GetField(field, BindingFlags.Instance | BindingFlags.NonPublic) == null)
+        throw new Exception($"Native Ancient dialogue binding missing: {field}");
+if (typeof(MegaCrit.Sts2.Core.Nodes.GodotExtensions.NClickableControl).GetProperty("IsEnabled")?.PropertyType != typeof(bool))
+    throw new Exception("Ancient dialogue availability requires the native enabled flag");
+Console.WriteLine("Native Ancient bindings: actual advance hitbox and current-line fields present; no caption matching");

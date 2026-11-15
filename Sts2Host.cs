@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Collections;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
@@ -57,6 +58,7 @@ public sealed class Sts2Host
     private ulong _nextFrameCheck;
     private ulong _revision;
     private Pending? _pending;
+    private readonly WorkflowService _workflows;
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private sealed class Pending
@@ -78,6 +80,12 @@ public sealed class Sts2Host
     {
         _bridge = bridge;
         _tree = tree;
+        _workflows = new WorkflowService(
+            () => JsonNode.Parse(Read())!.AsObject(),
+            args => JsonNode.Parse(RequestNative(args.ToJsonString()))!.AsObject(),
+            ActivateChoice,
+            BrowseShop,
+            () => (long)Time.GetTicksMsec());
     }
 
     public static void Install(Node bridge, SceneTree tree)
@@ -89,6 +97,7 @@ public sealed class Sts2Host
         node.Set("request_callback", Callable.From<string, string>(host.Request));
         node.Set("inspect_callback", Callable.From<string, string>(host.Inspect));
         node.Set("select_card_callback", Callable.From<string, string>(host.SelectCard));
+        node.Set("workflow_callback", Callable.From<string, string>(host.Workflow));
         node.Set("frame_callback", Callable.From(host.Frame));
         bridge.AddChild(node);
         var handle = node.Call("configure", bridge);
@@ -340,7 +349,11 @@ public sealed class Sts2Host
         return false;
     }
 
-    private static IEnumerable<string> Labels(Node root) => Walk(root).Where(n => n is RichTextLabel or Label && Visible(n) && HasInk(n))
+    private static bool ChatAvailable(Control? hitbox) => hitbox is NClickableControl { IsEnabled: true } && Visible(hitbox);
+
+    private static IEnumerable<string> Labels(Node root, bool ancientChat = false) => Walk(root)
+        .Where(n => n is RichTextLabel or Label && Visible(n) && HasInk(n)
+            && (!ancientChat || !HasParentType(n, nameof(NEventOptionButton))))
         .Select(n => n switch { RichTextLabel rich => rich.GetParsedText(), Label label => label.Text, _ => "" })
         .Where(s => !string.IsNullOrWhiteSpace(s)).Select(Text).Distinct();
 
@@ -416,6 +429,18 @@ public sealed class Sts2Host
         var hitbox = Hitbox(control);
         var rect = hitbox.GetGlobalRect();
         var label = string.Join(" · ", Labels(control).Take(6));
+        if (control is NAncientDialogueHitbox)
+        {
+            label = "Advance dialogue";
+            for (var owner = control.GetParent(); owner != null; owner = owner.GetParent())
+                if (owner is NAncientEventLayout layout && Get(layout, "_fakeNextButton") is Node next)
+                {
+                    var caption = string.Join(" · ", Labels(next));
+                    if (!string.IsNullOrWhiteSpace(caption))
+                        label = caption;
+                    break;
+                }
+        }
         var enabled = hitbox is not NClickableControl clickable || clickable.IsEnabled;
         string? blockedReason = null;
         string? blockedBy = null;
@@ -684,6 +709,17 @@ public sealed class Sts2Host
 
     public string SelectCard(string json)
     {
+        if (_workflows.Busy)
+            return Serialize(new
+            {
+                error = "A service operation is still running"
+            });
+
+        return SelectCardNative(json);
+    }
+
+    private string SelectCardNative(string json)
+    {
         try
         {
             RefreshCombat();
@@ -721,7 +757,7 @@ public sealed class Sts2Host
         };
     }
 
-    private (List<Control> Controls, object[] Choices) ReadChoices(Node scope, bool isUnlock, HashSet<Control> skippedRewards)
+    private (List<Control> Controls, object[] Choices) ReadChoices(Node scope, bool isUnlock, HashSet<Control> skippedRewards, bool ancientChat)
     {
         var controls = Walk(scope).OfType<Control>().Where(c =>
         {
@@ -733,11 +769,14 @@ public sealed class Sts2Host
                 || scope is not NCombatRoom && c is NCardHolder { CardModel: not null });
             return offered || Visible(c) && Hitbox(c).GetGlobalRect().HasArea();
         }).ToList();
+        if (ancientChat)
+            controls.RemoveAll(c => c is NEventOptionButton || HasParentType(c, nameof(NEventOptionButton)));
         if (scope is NTimelineScreen)
             controls.RemoveAll(IsTimelineOverlay);
         if (scope.GetType().Name is "NMerchantRoom")
             controls.RemoveAll(c => HasParentType(c, "NMerchantInventory"));
         var choices = controls.Where(c => c is NClickableControl or BaseButton or NCardHolder or NMapPoint or NMerchantSlot or NCardBundle)
+            .Where(c => c is not NAncientDialogueLine)
             .Where(c => !isUnlock || c.GetType().Name == "NUnlockConfirmButton")
             .Where(c => c is NCardHolder or NMerchantSlot or NCardBundle || !HasChoiceParent(c))
             .Where(c => !(CombatReady && HasParentType(c, "NPlayerHand")))
@@ -766,7 +805,7 @@ public sealed class Sts2Host
         // A required card choice can suspend the action executor before normal draw.
         var enabledChoice = choices.Any(c => Get(c, "Enabled") is true);
         var ready = ordinaryCombat ? CombatReady : enabledChoice
-            && (Idle || IsCardSelection(scope) || RunManager.Instance.ActionExecutor?.IsPaused == true
+            && (Idle || ActiveCardSelection(scope) || RunManager.Instance.ActionExecutor?.IsPaused == true
                 || _pending?.Status == "choice_required")
             && !waitingForRewards && (scope is not NMapScreen map || !map.IsTraveling && map.IsTravelEnabled);
         return ready && NGame.Instance?.Transition?.InTransition != true;
@@ -807,7 +846,10 @@ public sealed class Sts2Host
             var shopOwner = merchantScene as Node ?? fakeMerchant;
             var shopInventory = merchantScene?.Inventory ?? Get(fakeMerchant, "Inventory") as NMerchantInventory;
             var fakeButton = Get(fakeMerchant, "MerchantButton") as NClickableControl;
-            var (controls, choices) = ReadChoices(scope, isUnlock, skippedRewards);
+            var dialogueLayout = Walk(scope).OfType<NAncientEventLayout>().FirstOrDefault();
+            var dialogueHitbox = Get(dialogueLayout, "_dialogueHitbox") as Control;
+            var ancientChat = ChatAvailable(dialogueHitbox);
+            var (controls, choices) = ReadChoices(scope, isUnlock, skippedRewards, ancientChat);
             var map = scope is NMapScreen ? Walk(scope).OfType<NMapPoint>().Where(p => p.Point != null)
                 .Select(p => new
                 {
@@ -827,23 +869,24 @@ public sealed class Sts2Host
                 Status = _pending.Status,
                 Error = _pending.Error
             };
-            var handSelection = combat != null && NCombatRoom.Instance?.Ui.Hand.CurrentMode != NPlayerHand.Mode.Play;
+            var handSelection = combat != null && ActiveHandSelection(scope);
             var selectionHost = handSelection ? NCombatRoom.Instance?.Ui.Hand as object : NOverlayStack.Instance?.Peek() as object;
             var prefs = Get(selectionHost, "_prefs");
             var selected = Get(selectionHost, "_selectedCards") as IEnumerable;
             var combatView = combat != null && scope is NCombatRoom && !handSelection;
             var room = player?.RunState.CurrentRoom;
             var eventModel = (Get(room, "LocalMutableEvent") ?? Get(room, "CanonicalEvent")) as EventModel;
-            var dialogueLayout = Walk(scope).OfType<NAncientEventLayout>().FirstOrDefault();
-            var dialogueHitbox = Get(dialogueLayout, "_dialogueHitbox") as Control;
+            var dialogueLine = Get(dialogueLayout, "_currentDialogueLine") as int?;
+            var currentSpeech = Get(dialogueLayout, "_dialogueContainer") is Node lines && dialogueLine is int line
+                && line >= 0 && line < lines.GetChildCount() ? lines.GetChild(line) : null;
             object? dialogue = dialogueLayout == null ? null : new
             {
                 Source = "ancient_dialogue",
                 Line = Get(dialogueLayout, "_currentDialogueLine"),
                 LastLine = Get(dialogueLayout, "IsDialogueOnLastLine"),
-                CanAdvance = dialogueHitbox != null && Visible(dialogueHitbox) && dialogueHitbox is NClickableControl { IsEnabled: true },
-                Ref = dialogueHitbox != null && Visible(dialogueHitbox) ? _bridge.Call("reference", dialogueHitbox).AsString() : null,
-                Text = Labels(dialogueLayout).ToArray()
+                CanAdvance = ancientChat,
+                Ref = ancientChat ? _bridge.Call("reference", dialogueHitbox!).AsString() : null,
+                Text = currentSpeech == null ? [] : Labels(currentSpeech).ToArray()
             };
             // Architect speech uses combat-layout bubbles rather than an ancient
             // event layout. Read only the current visible bubble, never future lines.
@@ -880,7 +923,7 @@ public sealed class Sts2Host
             if (scope is NMerchantRoom && merchantScene?.Inventory == null)
                 ready = false;
             var preview = scope.Name.ToString().Contains("PreviewContainer");
-            return Serialize(new
+            var snapshot = JsonSerializer.SerializeToNode(new
             {
                 Screen = preview ? "CardPreview" : handSelection ? "HandSelection" : scope.GetType().Name,
                 Preview = preview ? Walk(scope).OfType<NCardHolder>().Select(h => h.CardModel).OfType<CardModel>().Select(c => Card(c)).ToArray() : null,
@@ -1024,10 +1067,12 @@ public sealed class Sts2Host
                 Ready = ready,
                 Pending = pending,
                 Choices = choices,
-                Text = Labels(scope).Take(100).ToArray(),
+                Text = Labels(scope, ancientChat).Take(100).ToArray(),
                 Map = map,
                 MapControl = scope is NMapScreen ? _bridge.Call("reference", scope).AsString() : null
-            });
+            }, Json)!.AsObject();
+            snapshot["operation"] = _workflows.Observe(snapshot);
+            return snapshot.ToJsonString();
         }
         catch (Exception error) { return Serialize(new { error = error.GetBaseException().Message }); }
     }
@@ -1053,10 +1098,13 @@ public sealed class Sts2Host
     {
         try
         {
-            RefreshCombat();
-            var player = Player ?? throw new InvalidOperationException("No run in progress");
             using var document = JsonDocument.Parse(json);
             var kind = document.RootElement.GetProperty("kind").GetString();
+            if (kind == "game")
+                return Serialize(GameInfo(MegaCrit.Sts2.Core.Debug.ReleaseInfoManager.Instance.ReleaseInfo));
+
+            RefreshCombat();
+            var player = Player ?? throw new InvalidOperationException("No run in progress");
             var upgrades = document.RootElement.TryGetProperty("upgrades", out var option) && option.ValueKind == JsonValueKind.True;
             if (kind == "card")
             {
@@ -1100,7 +1148,81 @@ public sealed class Sts2Host
         catch (Exception error) { return Serialize(new { error = error.GetBaseException().Message }); }
     }
 
+    private static object GameInfo(MegaCrit.Sts2.Core.Debug.ReleaseInfo? release) => new
+    {
+        Source = "native_release_info",
+        Available = release != null,
+        Version = release?.Version,
+        Commit = release?.Commit,
+        Branch = release?.Branch,
+        Date = release?.Date,
+        MainAssemblyHash = release?.MainAssemblyHash
+    };
+
     public string Request(string json)
+    {
+        if (_workflows.Busy)
+            return Serialize(new
+            {
+                error = "A service operation is still running"
+            });
+
+        return RequestNative(json);
+    }
+
+    public string Workflow(string json)
+    {
+        try
+        {
+            var args = JsonNode.Parse(json)!.AsObject();
+            return Serialize(args["command"]?.GetValue<string>() switch
+            {
+                "start" => _workflows.Start(args["args"]!.AsObject()),
+                "status" => _workflows.Status(args["operation"]?.GetValue<string>() ?? ""),
+                _ => throw new ArgumentException("Unknown service callback command")
+            });
+        }
+        catch (Exception error) { return Serialize(new { error = error.GetBaseException().Message }); }
+    }
+
+    private Node ResolveNode(string id) => _bridge.Call("resolve_object", id).AsGodotObject() as Node
+        ?? throw new WorkflowService.ActivationRejected("UI reference is stale");
+
+    private void BrowseShop(string id)
+    {
+        var owner = ResolveNode(id);
+        var open = owner.GetType().GetMethod("OpenInventory")
+            ?? throw new InvalidOperationException("Native shop inventory handler is unavailable");
+        open.Invoke(owner, null);
+    }
+
+    private void ActivateChoice(JsonObject choice)
+    {
+        if (choice["activation"] is JsonObject activation)
+        {
+            if (activation["kind"]?.GetValue<string>() == "select_card")
+            {
+                var result = JsonNode.Parse(SelectCardNative(new JsonObject { ["card"] = activation["card"]!.DeepClone() }.ToJsonString()))!;
+                if (result["error"] != null)
+                    throw new InvalidOperationException(result["error"]!.GetValue<string>());
+
+                return;
+            }
+            var target = ResolveNode(activation["target"]!.GetValue<string>());
+            target.EmitSignal(activation["signal"]!.GetValue<string>(), ResolveNode(activation["argument"]!.GetValue<string>()));
+            return;
+        }
+        var control = ResolveNode(choice["ref"]!.GetValue<string>());
+        if (control is not Control visible || !Visible(visible) || control is NClickableControl { IsEnabled: false })
+            throw new WorkflowService.ActivationRejected("Choice is no longer enabled and visible");
+
+        var name = control is NCharacterSelectButton ? "Select" : "ForceClick";
+        var method = control.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new WorkflowService.ActivationRejected("No native activation is available; use generic input explicitly");
+        method.Invoke(control, null);
+    }
+
+    private string RequestNative(string json)
     {
         Pending? submitted = null;
         try
@@ -1291,7 +1413,13 @@ public sealed class Sts2Host
         throw new InvalidOperationException("Unsupported target type: " + type);
     }
 
-    private static bool IsCardSelection(object? scope) => scope is NCardGridSelectionScreen or NChooseACardSelectionScreen;
+    private static bool IsCardSelection(object? scope) => scope is NCardGridSelectionScreen
+        or NChooseACardSelectionScreen || scope is NPlayerHand { IsInCardSelection: true };
+
+    private static bool ActiveHandSelection(Node scope) => scope is NCombatRoom room
+        && IsCardSelection(room.Ui.Hand) && Visible(room.Ui.Hand);
+
+    private static bool ActiveCardSelection(Node scope) => IsCardSelection(scope) || ActiveHandSelection(scope);
 
     private void UpdatePending()
     {
@@ -1310,7 +1438,7 @@ public sealed class Sts2Host
                 p.Potion = null;
                 return;
             }
-            p.Status = state == "GatheringPlayerChoice" ? "choice_required" : "running";
+            p.Status = state == "GatheringPlayerChoice" || ActiveCardSelection(Scope()) ? "choice_required" : "running";
             if (p.Action.CompletionTask.IsCompleted)
             {
                 p.Error = p.Action.Exception?.Message;
@@ -1321,7 +1449,7 @@ public sealed class Sts2Host
         {
             if (!p.Task.IsCompleted)
             {
-                p.Status = IsCardSelection(NOverlayStack.Instance?.Peek()) ? "choice_required" : "running";
+                p.Status = ActiveCardSelection(Scope()) ? "choice_required" : "running";
                 return;
             }
             p.Error = p.Task.Exception?.GetBaseException().Message;
@@ -1339,7 +1467,7 @@ public sealed class Sts2Host
             if (Combat == null || (p.LeftPlayPhase && CombatReady && Combat.RoundNumber > p.Round))
                 p.Status = "completed";
             else
-                p.Status = IsCardSelection(NOverlayStack.Instance?.Peek()) ? "choice_required" : "running";
+                p.Status = ActiveCardSelection(Scope()) ? "choice_required" : "running";
         }
         else if (p.Potion != null && Player != null && !Player.PotionSlots.Any(x => ReferenceEquals(x, p.Potion)) && Idle)
             p.Status = "completed";
@@ -1362,7 +1490,10 @@ public sealed class Sts2Host
         {
             RefreshCombat();
             UpdatePending();
+            _workflows.Advance();
             var scope = Scope();
+            var layout = Walk(scope).OfType<NAncientEventLayout>().FirstOrDefault();
+            var ancientChat = ChatAvailable(Get(layout, "_dialogueHitbox") as Control);
             NTimelineScreen? timeline = null;
             for (Node? parent = scope; parent != null; parent = parent.GetParent())
                 if (parent is NTimelineScreen found)
@@ -1389,6 +1520,7 @@ public sealed class Sts2Host
                     _pending.Id,
                     _pending.Status
                 },
+                Operation = _workflows.Summary,
                 HandMode = hand?.CurrentMode,
                 InCardPlay = hand?.InCardPlay,
                 Gold = player?.Gold,
@@ -1404,7 +1536,7 @@ public sealed class Sts2Host
                 SkippedRewards = skippedRewards,
                 Complete = Get(scope, "IsComplete"),
                 SummaryAnimating = Get(scope, "_isAnimatingSummary"),
-                Text = Labels(scope).Take(100).ToArray()
+                Text = Labels(scope, ancientChat).Take(100).ToArray()
             });
             if (key == _fingerprint)
                 return "";

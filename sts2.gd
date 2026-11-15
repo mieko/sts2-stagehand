@@ -6,6 +6,7 @@ var request_callback: Callable
 var inspect_callback: Callable
 var select_card_callback: Callable
 var frame_callback: Callable
+var workflow_callback: Callable
 var _bridge: Node
 var _handle := ""
 
@@ -16,7 +17,14 @@ func configure(bridge: Node) -> String:
 		self,
 		"Sts2",
 		"Sts2",
-		{ "request": request, "state": state, "inspect": inspect_state, "select_card": select_card },
+		{
+			"request": request,
+			"state": state,
+			"inspect": inspect_state,
+			"select_card": select_card,
+			"operate": operate,
+			"operation": operation,
+		},
 		observe,
 		["changed"],
 	)
@@ -33,6 +41,18 @@ func state(_params: Dictionary) -> Variant:
 
 func request(params: Dictionary) -> Variant:
 	return _decode(request_callback.call(JSON.stringify(params)))
+
+
+func operate(params: Dictionary) -> Variant:
+	return _decode(workflow_callback.call(JSON.stringify({ "command": "start", "args": params })))
+
+
+func operation(params: Dictionary) -> Variant:
+	return _decode(
+		workflow_callback.call(
+			JSON.stringify({ "command": "status", "operation": params.get("operation", "") })
+		)
+	)
 
 
 func select_card(params: Dictionary) -> Variant:

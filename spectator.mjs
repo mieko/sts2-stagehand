@@ -3,6 +3,7 @@ const activeAction = (pending) =>
 
 export function isSettledObservation(state) {
   if (!state.ready) return false;
+  if (['accepted', 'running'].includes(state.operation?.status)) return false;
   // Native choice overlays may be ready while their owning action is suspended.
   // An accepted/running combat action is not itself a completed position.
   if (state.screen === 'NCombatRoom') return state.combat?.ready && !activeAction(state.pending);
@@ -75,5 +76,7 @@ export function observationKey(state) {
 }
 
 export function observationBoundary(state) {
-  return activeAction(state.pending) ? 'choice_required' : 'settled_position';
+  return activeAction(state.pending) || state.operation?.atChoiceStop
+    ? 'choice_required'
+    : 'settled_position';
 }

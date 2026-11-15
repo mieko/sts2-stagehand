@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { Sts2 } from '../../sts2.mjs';
+import { ServiceSts2 as Sts2 } from './service.mjs';
 
 export function fixture({ finish = true, finishStatus = 'completed' } = {}) {
   const client = new EventEmitter();
@@ -44,7 +44,7 @@ export function fixture({ finish = true, finishStatus = 'completed' } = {}) {
       return { action, status: 'accepted' };
     },
   };
-  return { game: new Sts2(client, endpoint), order, cards, listeners, client };
+  return { game: new Sts2(client, endpoint), order, cards, listeners, client, endpoint };
 }
 
 export function uiFixture(initial, activate) {
@@ -76,7 +76,7 @@ export function uiFixture(initial, activate) {
       return async () => listeners.delete(listener);
     },
   };
-  return { game: new Sts2(client, endpoint), calls, update };
+  return { game: new Sts2(client, endpoint), calls, update, endpoint };
 }
 
 export const button = (ref, type, label, detail) => ({ ref, type, label, detail, enabled: true });

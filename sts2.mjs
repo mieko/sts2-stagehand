@@ -1,38 +1,14 @@
 import { createRequire } from 'node:module';
 import { cardVariant, deckChanges } from './cards.mjs';
 import { present } from './present.mjs';
-import { isShopEntrance, decisionKind, choiceView, decisionView } from './decision.mjs';
+import { decisionKind, choiceView, decisionView } from './decision.mjs';
 import { isSettledObservation, observationKey, observationBoundary } from './spectator.mjs';
 export { present } from './present.mjs';
 
-const { connect, GodotValue } = await import(
-  createRequire(import.meta.url).resolve('godot-stagehand')
-);
+const { connect } = await import(createRequire(import.meta.url).resolve('godot-stagehand'));
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 class DecisionTimeoutError extends Error {}
-const fingerprint = (state) =>
-  JSON.stringify({
-    screen: state.screen,
-    room: state.room,
-    choices: state.choices
-      .map(({ ref, label, enabled, selected, detail }) => ({
-        ref,
-        label,
-        enabled,
-        selected,
-        detail,
-      }))
-      .sort((a, b) => a.ref.localeCompare(b.ref)),
-    result: state.result,
-    selection: state.selection,
-    preview: state.preview,
-    player: state.player,
-    combat: state.combat,
-    event: state.event,
-    dialogueLine: state.dialogue?.line,
-  });
-
 function cardByName(cards, name) {
   const matches = cards.filter((c) => (c.name ?? c.label).toLowerCase() === name.toLowerCase());
   const variants = new Set(matches.map(cardVariant));
@@ -58,10 +34,15 @@ function creatureTarget(state, target) {
   return creatures[0];
 }
 
-function batchError(error, results, remaining) {
-  error.results = results;
-  error.remaining = remaining;
-  return error;
+function serviceOutcome(outcome) {
+  const result = { ...outcome };
+  if (result.selectedChoice) result.selectedChoice = choiceView(result.selectedChoice);
+  if (result.blocker?.choice)
+    result.blocker = { ...result.blocker, choice: choiceView(result.blocker.choice) };
+  if (result.results) result.results = result.results.map(serviceOutcome);
+  if (result.selection) result.selection = serviceOutcome(result.selection);
+  if (result.automaticOutcome) result.automaticOutcome = serviceOutcome(result.automaticOutcome);
+  return result;
 }
 
 // Rediscovery and decoded references must share the same FIFO and spectator state.
@@ -105,19 +86,23 @@ export async function connectSts2(url, options = {}) {
 export class Sts2 {
   #tail = Promise.resolve();
   #queueError;
-  #nativeClicks = new Map();
-  #browsedShop;
   #spectatorDelayMs = 0;
+  #autoSkipDialogue = false;
   #deckBeforeCombat;
   #spectatorLast;
   #spectatorWaiting = false;
   #spectatorPosition = 0;
+  #lastOperation;
+  #lastAction;
   constructor(client, endpoint) {
     this.client = client;
     this.endpoint = endpoint;
   }
   async state() {
     return (await this.endpoint.observe()).value;
+  }
+  async info() {
+    return this.endpoint.invoke('inspect', { kind: 'game' });
   }
   async deck({ upgrades = false } = {}) {
     return (await this.endpoint.invoke('inspect', { kind: 'deck', upgrades })).cards;
@@ -133,9 +118,33 @@ export class Sts2 {
   async piles() {
     return this.endpoint.invoke('inspect', { kind: 'piles' });
   }
+  async operation(operation) {
+    const receipt = await this.endpoint.invoke('operation', { operation });
+    return {
+      ...receipt,
+      ...(receipt.outcome && { outcome: serviceOutcome(receipt.outcome) }),
+    };
+  }
+
+  // Passive recovery: await the submitted work, never resubmit its remaining tail.
+  async recover(options) {
+    options?.signal?.throwIfAborted();
+    await this.#tail;
+    let outcome;
+    if (this.#lastAction) outcome = await this.#waitAction(this.#lastAction, options);
+    else {
+      const receipt = await this.operation(this.#lastOperation);
+      this.#lastOperation = receipt.operation;
+      outcome = await this.#waitOperation(receipt, options);
+    }
+    return {
+      ...outcome,
+      decision: outcome.state ? decisionView(outcome.state) : undefined,
+    };
+  }
   async decision({ wait = false, ...options } = {}) {
     const state = wait ? await this.waitFor((s) => s.ready, options) : await this.state();
-    if (!this.#queueError && state.ready && this.#forcedStep(state))
+    if (!this.#queueError && state.ready)
       return (await this.#enqueue(async () => ({ status: 'ready', state: await this.state() })))
         .decision;
 
@@ -153,6 +162,11 @@ export class Sts2 {
       throw new RangeError('Spectator pacing must be in 0..5000 milliseconds');
 
     this.#spectatorDelayMs = milliseconds;
+  }
+  setDialogueAutoskip(enabled = false) {
+    if (typeof enabled !== 'boolean') throw new TypeError('Dialogue autoskip must be boolean');
+
+    this.#autoSkipDialogue = enabled;
   }
   async #pace() {
     if (this.#spectatorDelayMs) await pause(this.#spectatorDelayMs);
@@ -187,6 +201,8 @@ export class Sts2 {
               (outcome.warning ?? outcome.error ?? outcome.status),
           );
           error.outcome = outcome;
+          error.results = outcome.results;
+          error.remaining = outcome.remaining;
           throw error;
         }
 
@@ -212,7 +228,10 @@ export class Sts2 {
   async resumeQueue() {
     await this.#tail;
     const state = await this.state();
-    if (['accepted', 'running'].includes(state.pending?.status))
+    if (
+      ['accepted', 'running'].includes(state.pending?.status) ||
+      ['accepted', 'running'].includes(state.operation?.status)
+    )
       throw new Error('The game action is still running; observe or wait for its outcome');
 
     this.#queueError = undefined;
@@ -241,165 +260,48 @@ export class Sts2 {
     });
   }
 
-  #forcedStep(state) {
-    const enabled = state.choices.filter((c) => c.enabled);
-    const shopkeeperDecision = state.player?.potions?.some(
-      (p) => p.usable && p.targets?.some((t) => t.kind === 'shopkeeper'),
-    );
-    if (
-      isShopEntrance(state) &&
-      state.shop.canBrowse &&
-      !state.shop.open &&
-      this.#browsedShop !== state.shop.control &&
-      !shopkeeperDecision
-    )
-      return { kind: 'browse_shop', controller: state.shop.control };
+  async #operate(kind, params, options) {
+    options?.signal?.throwIfAborted();
+    this.#lastOperation = undefined;
+    this.#lastAction = undefined;
+    const accepted = await this.endpoint.invoke('operate', {
+      kind,
+      ...params,
+      pacingMs: this.#spectatorDelayMs,
+      autoSkipDialogue: this.#autoSkipDialogue,
+    });
+    this.#lastOperation = accepted.operation;
+    return this.#waitOperation(accepted, options);
+  }
 
-    if (state.screen === 'NTreasureRoom') {
-      const chest = enabled.find((c) => c.type === 'NTreasureButton');
-      const proceed = enabled.find((c) => c.type === 'NProceedButton');
-      if (chest && !proceed) return { choice: chest, kind: 'open_chest' };
-
-      if (
-        proceed &&
-        !enabled.some((c) => c.type === 'NTreasureRoomRelicHolder') &&
-        proceed.isSkip === false
-      )
-        return { choice: proceed, kind: 'leave_resolved_treasure' };
-    }
-    const merchant = enabled.find((c) => c.type === 'NMerchantButton');
-    if (
-      merchant &&
-      !state.shop &&
-      ['NMerchantRoom', 'NEventRoom'].includes(state.screen) &&
-      !shopkeeperDecision
-    )
-      return { choice: merchant, kind: 'browse_shop' };
-
-    if (state.screen === 'NCrystalSphereScreen' && state.crystalSphere?.finished) {
-      const proceed = enabled.find((c) => c.type === 'NProceedButton');
-      if (proceed) return { choice: proceed, kind: 'leave_finished_sphere' };
-    }
-    if (state.screen === 'NRewardsScreen' && state.rewards?.complete) {
-      const proceed = enabled.find((c) => c.type === 'NProceedButton' && c.isSkip === false);
-      if (proceed) return { choice: proceed, kind: 'leave_empty_rewards' };
-    }
-    if (
-      state.screen === 'NRewardsScreen' &&
-      state.rewards?.remaining > 0 &&
-      state.rewards.unresolved === 0
-    ) {
-      const proceed = enabled.find((c) => c.type === 'NProceedButton');
-      if (proceed) return { choice: proceed, kind: 'leave_resolved_rewards' };
-    }
-    if (state.screen === 'NRestSiteRoom' && !enabled.some((c) => c.type === 'NRestSiteButton')) {
-      const proceed = enabled.find((c) => c.type === 'NProceedButton');
-      if (proceed) return { choice: proceed, kind: 'leave_resolved_rest' };
-    }
-    if (state.screen === 'NEventRoom' && state.event?.finished && !state.shop) {
-      const proceed = enabled.find((c) => c.type === 'NEventOptionButton' && c.detail?.isProceed);
-      if (proceed) return { choice: proceed, kind: 'leave_finished_event' };
-    }
-    if (state.dialogue?.canAdvance && !enabled.some((c) => c.type === 'NEventOptionButton')) {
-      const dialogue = enabled.find((c) => c.ref === state.dialogue.ref);
-      if (dialogue) return { choice: dialogue, kind: 'advance_dialogue' };
+  async #waitOperation(accepted, options) {
+    try {
+      let receipt = accepted;
+      if (['accepted', 'running'].includes(accepted.status)) {
+        await this.waitFor(
+          (state) =>
+            state.operation?.operation === accepted.operation &&
+            !['accepted', 'running'].includes(state.operation.status),
+          { ...options, timeoutMs: options?.timeoutMs ?? accepted.completionTimeoutMs ?? 60_000 },
+        );
+        receipt = await this.operation(accepted.operation);
+      }
+      return receipt.outcome;
+    } catch (error) {
+      error.operation = accepted.operation;
+      throw error;
     }
   }
 
   async #settle(outcome) {
-    if (!outcome.state || ['unconfirmed', 'failed', 'cancelled'].includes(outcome.status))
+    if (
+      !outcome.state ||
+      outcome.operation ||
+      ['unconfirmed', 'failed', 'cancelled'].includes(outcome.status)
+    )
       return outcome;
 
-    let state = outcome.state;
-    const steps = [...(outcome.automaticSteps ?? [])],
-      text = new Set(outcome.outcomeText ?? []);
-    let automaticOutcome;
-    const progress = () => ({
-      ...outcome,
-      state,
-      automaticSteps: [...steps],
-      outcomeText: [...text],
-      ...(automaticOutcome && { automaticOutcome }),
-    });
-    try {
-      for (let count = 0; count < 32; count++) {
-        if (isShopEntrance(state) && state.shop.open) {
-          state = await this.waitFor((s) => s.ready && decisionKind(s) === 'shop');
-        }
-        if (
-          state.screen === 'NRewardsScreen' &&
-          state.rewards?.remaining === 0 &&
-          !state.rewards.complete
-        ) {
-          state = await this.waitFor(
-            (s) =>
-              s.ready &&
-              (s.screen !== 'NRewardsScreen' || s.rewards?.complete || s.rewards?.remaining > 0),
-          );
-        }
-        if (state.screen === 'NEventRoom' && state.event?.finished && !state.shop) {
-          if (state.event.description) text.add(state.event.description);
-          if (!state.choices.some((c) => c.enabled && c.detail?.isProceed)) {
-            state = await this.waitFor(
-              (s) =>
-                s.ready &&
-                (s.screen !== 'NEventRoom' ||
-                  s.choices.some((c) => c.enabled && c.detail?.isProceed)),
-            );
-          }
-        }
-        if (
-          state.screen === 'NTreasureRoom' &&
-          !state.choices.some((c) => c.type === 'NTreasureButton' && c.enabled) &&
-          !state.choices.some((c) => c.type === 'NProceedButton' && c.enabled)
-        ) {
-          state = await this.waitFor(
-            (s) =>
-              s.ready &&
-              (s.screen !== 'NTreasureRoom' ||
-                s.choices.some((c) => c.type === 'NProceedButton' && c.enabled)),
-          );
-        }
-        const step = this.#forcedStep(state);
-        if (!step) return progress();
-
-        if (state.dialogue?.text) for (const line of state.dialogue.text) text.add(line);
-        let next;
-        automaticOutcome = { kind: step.kind, status: 'attempting' };
-        try {
-          if (step.controller) {
-            this.#browsedShop = step.controller;
-            await this.#pace();
-            await this.client.object(step.controller).call('OpenInventory');
-            next = {
-              status: 'observed_change',
-              state: await this.waitFor((s) => s.ready && decisionKind(s) === 'shop'),
-            };
-          } else next = await this.#choose(step.choice);
-        } catch (error) {
-          // A game-owned transition may already have removed this forced UI step.
-          // This error is raised before activation, so no command is repeated.
-          if (error.code !== 'STALE_CHOICE') throw error;
-
-          state = error.state;
-          automaticOutcome = undefined;
-          continue;
-        }
-        automaticOutcome = { ...next, kind: step.kind };
-        state = next.state ?? state;
-        if (next.status !== 'observed_change')
-          return { ...progress(), status: next.status, warning: next.warning, error: next.error };
-
-        steps.push(step.kind);
-        automaticOutcome = undefined;
-      }
-      throw new Error('Automatic UI progression did not reach a decision; inspect state()');
-    } catch (error) {
-      const nested = error.outcome;
-      error.outcome = progress();
-      if (nested) error.outcome.automaticOutcome = { ...automaticOutcome, outcome: nested };
-      throw error;
-    }
+    return this.#operate('settle', { outcome });
   }
 
   takeRelic(relic, options) {
@@ -508,34 +410,7 @@ export class Sts2 {
   }
 
   async #selectCards(cards, { confirm = true, ...options } = {}) {
-    const requested = Array.isArray(cards) ? cards : [cards],
-      results = [];
-    let state = await this.state();
-    for (const [index, card] of requested.entries()) {
-      if (decisionKind(state) !== 'card_selection')
-        return { status: 'choice_required', results, remaining: requested.slice(index), state };
-
-      try {
-        const result = await this.#pickCard(card, options, { unselected: true });
-        results.push(result);
-        state = result.state;
-        if (result.status !== 'observed_change')
-          return { ...result, results, remaining: requested.slice(index + 1) };
-      } catch (error) {
-        throw batchError(error, results, requested.slice(index));
-      }
-    }
-    if (confirm && state.choices.some((c) => c.type === 'NConfirmButton' && c.enabled)) {
-      try {
-        const result = await this.#chooseType('NConfirmButton', options);
-        results.push(result);
-        state = result.state;
-        if (result.status !== 'observed_change') return { ...result, results, remaining: [] };
-      } catch (error) {
-        throw batchError(error, results, []);
-      }
-    }
-    return { status: 'completed', results, remaining: [], state };
+    return this.#operate('selectCards', { cards, confirm }, options);
   }
 
   upgradeCard(card, options) {
@@ -830,7 +705,6 @@ export class Sts2 {
       if (decisionKind(state) === 'shop') return { status: 'ready', state };
 
       if (state.shop?.canBrowse && state.shop.control) {
-        this.#browsedShop = state.shop.control;
         await this.#pace();
         await this.client.object(state.shop.control).call('OpenInventory');
         return {
@@ -966,8 +840,13 @@ export class Sts2 {
   }
 
   async #request(kind, params, options) {
+    options?.signal?.throwIfAborted();
     await this.#pace();
+    options?.signal?.throwIfAborted();
+    this.#lastAction = undefined;
+    this.#lastOperation = undefined;
     const accepted = await this.endpoint.invoke('request', { kind, ...params });
+    this.#lastAction = accepted.action;
     try {
       return await this.#waitAction(accepted.action, options);
     } catch (error) {
@@ -982,7 +861,7 @@ export class Sts2 {
         state.pending?.action === action &&
         !['accepted', 'running'].includes(state.pending.status) &&
         (state.ready || ['failed', 'cancelled'].includes(state.pending.status)),
-      options,
+      { ...options, timeoutMs: options?.timeoutMs ?? 60_000 },
     );
     return { action, status: state.pending.status, error: state.pending.error, state };
   }
@@ -1010,239 +889,39 @@ export class Sts2 {
   }
 
   playCards(plays, { endTurn = false, ...options } = {}) {
-    return this.#enqueue(async () => {
-      const results = [];
-      for (const [index, play] of plays.entries()) {
-        const item = typeof play === 'string' || play?.ref ? { card: play } : play;
-        let result, selection;
-        try {
-          result = await this.#play(item.card, item.target, options);
-          if (result.status === 'choice_required' && item.select !== undefined) {
-            selection = await this.#selectCards(item.select, options);
-            if (selection.status !== 'completed')
-              return {
-                ...selection,
-                results: [...results, { ...result, selection }],
-                remaining: plays.slice(index + 1),
-                endTurnPending: endTurn,
-              };
-
-            result = await this.#waitAction(result.action, options);
-          }
-        } catch (error) {
-          if (result)
-            results.push({
-              ...result,
-              selection: selection ?? {
-                results: error.results ?? [],
-                remaining: error.remaining ?? [],
-              },
-            });
-          throw batchError(error, results, plays.slice(index + (result ? 1 : 0)));
-        }
-        results.push(result);
-        if (result.status !== 'completed')
-          return {
-            status: result.status,
-            results,
-            remaining: plays.slice(index + 1),
-            endTurnPending: endTurn,
-            state: result.state,
-          };
-
-        if (!result.state.combat)
-          return {
-            status: 'completed',
-            results,
-            remaining: plays.slice(index + 1),
-            combatEnded: true,
-            turnEnded: false,
-            state: result.state,
-          };
-      }
-      let state = results.at(-1)?.state ?? (await this.state());
-      let turnEnded = false;
-      if (endTurn && state.combat) {
-        try {
-          const result = await this.#request('endTurn', {}, options);
-          results.push(result);
-          state = result.state;
-          if (result.status !== 'completed') return { ...result, results, remaining: [] };
-
-          turnEnded = true;
-        } catch (error) {
-          throw batchError(error, results, []);
-        }
-      }
-      return { status: 'completed', results, remaining: [], turnEnded, state };
-    });
-  }
-
-  async #claimRewards(items, options) {
-    const requested = Array.isArray(items) ? items : [items];
-    const results = [];
-    for (const [index, item] of requested.entries()) {
-      try {
-        const state = await this.state();
-        if (decisionKind(state) !== 'rewards') throw new Error('No reward list is open');
-
-        const matches = state.choices
-          .filter((c) => c.type === 'NRewardButton')
-          .filter((c) =>
-            typeof item === 'string'
-              ? c.label.toLowerCase() === item.toLowerCase()
-              : c.ref === item?.ref,
-          );
-        if (matches.length !== 1)
-          throw new Error('Item is missing or ambiguous; pass its current choice object');
-
-        if (matches[0].blockedBy === 'potion_inventory_full')
-          return {
-            status: 'choice_required',
-            blocker: { kind: 'potion_inventory_full', choice: choiceView(matches[0]) },
-            results,
-            remaining: requested.slice(index),
-            state,
-          };
-
-        const result = await this.#choose(typeof item === 'object' ? item : matches[0], options);
-        results.push(result);
-        if (result.status !== 'observed_change')
-          return { ...result, results, remaining: requested.slice(index + 1) };
-
-        if (decisionKind(result.state) !== 'rewards')
-          return {
-            status: index + 1 === requested.length ? 'completed' : 'choice_required',
-            results,
-            remaining: requested.slice(index + 1),
-            state: result.state,
-          };
-      } catch (error) {
-        throw batchError(error, results, requested.slice(index));
-      }
-    }
-    return {
-      status: 'completed',
-      results,
-      remaining: [],
-      state: results.at(-1)?.state ?? (await this.state()),
-    };
+    return this.#enqueue(() => this.#operate('playCards', { plays, endTurn }, options));
   }
 
   async #buy(item, options) {
-    const state = await this.state();
-    if (decisionKind(state) !== 'shop') throw new Error('Open the shop inventory before buying');
-
-    const matches = state.choices
-      .filter((c) => /^NMerchant(Card|Relic|Potion|CardRemoval)$/.test(c.type))
-      .filter((c) =>
-        typeof item === 'string'
-          ? c.label.toLowerCase() === item.toLowerCase()
-          : c.offerRef === item?.offerRef,
-      );
-    if (matches.length !== 1)
-      throw new Error('Shop offer is missing or ambiguous; pass its current choice object');
-
-    const offer = matches[0];
-    if (!offer.enabled || !offer.offerRef)
-      throw new Error(offer.blockedReason ?? 'Shop offer is sold out or unaffordable');
-
-    return this.#request('buy', { offer: offer.offerRef }, options);
+    return this.#operate('buy', { items: [item] }, options);
   }
 
   buy(items, options) {
-    return this.#enqueue(async () => {
-      const requested = Array.isArray(items) ? items : [items],
-        results = [];
-      for (const [index, item] of requested.entries()) {
-        try {
-          const result = await this.#buy(item, options);
-          results.push(result);
-          if (result.status !== 'completed')
-            return { ...result, results, remaining: requested.slice(index + 1) };
-        } catch (error) {
-          throw batchError(error, results, requested.slice(index));
-        }
-      }
-      return {
-        status: 'completed',
-        results,
-        remaining: [],
-        state: results.at(-1)?.state ?? (await this.state()),
-      };
-    });
+    return this.#enqueue(() =>
+      this.#operate(
+        'buy',
+        {
+          items: Array.isArray(items) ? items : [items],
+        },
+        options,
+      ),
+    );
   }
 
   claimRewards(items, options) {
-    return this.#enqueue(() => this.#claimRewards(items, options));
+    return this.#enqueue(() =>
+      this.#operate(
+        'claimRewards',
+        {
+          items: Array.isArray(items) ? items : [items],
+        },
+        options,
+      ),
+    );
   }
 
-  collectLoot({ gold = true, potions = false, relics = [], openCardReward = true } = {}, options) {
-    return this.#enqueue(async () => {
-      if (
-        typeof gold !== 'boolean' ||
-        typeof openCardReward !== 'boolean' ||
-        !(typeof potions === 'boolean' || Array.isArray(potions)) ||
-        !Array.isArray(relics)
-      )
-        throw new TypeError(
-          'Use gold/openCardReward booleans, potions boolean or list, and an explicit relic list',
-        );
-
-      const state = await this.state();
-      if (decisionKind(state) !== 'rewards') throw new Error('No reward list is open');
-
-      const rewards = state.choices.filter((c) => c.type === 'NRewardButton');
-      const requested = rewards.filter((c) => c.detail?.category === 'GoldReward' && gold);
-      const add = (wanted, category) => {
-        const eligible = rewards.filter((c) => c.detail?.category === category);
-        if (wanted === true) {
-          requested.push(...eligible);
-          return;
-        }
-
-        for (const item of wanted || []) {
-          const matches = eligible.filter((c) =>
-            typeof item === 'string'
-              ? c.label.toLowerCase() === item.toLowerCase()
-              : c.ref === item?.ref,
-          );
-          if (matches.length !== 1)
-            throw new Error(
-              'Requested loot is missing or ambiguous; pass its current reward object',
-            );
-
-          if (!requested.includes(matches[0])) requested.push(matches[0]);
-        }
-      };
-      add(potions, 'PotionReward');
-      add(relics, 'RelicReward');
-      const claimed = await this.#claimRewards(requested, options);
-      if (claimed.status !== 'completed') return claimed;
-
-      if (decisionKind(claimed.state) !== 'rewards')
-        return { ...claimed, status: 'choice_required' };
-
-      if (
-        !openCardReward ||
-        !claimed.state.choices.some(
-          (c) => c.type === 'NRewardButton' && c.enabled && c.detail?.category === 'CardReward',
-        )
-      )
-        return claimed;
-
-      try {
-        const opened = await this.#openCardReward(options);
-        return {
-          ...opened,
-          status: opened.status === 'observed_change' ? 'choice_required' : opened.status,
-          results: [...claimed.results, opened],
-          remaining: [],
-        };
-      } catch (error) {
-        throw batchError(error, claimed.results, []);
-      }
-    });
+  collectLoot(params = {}, options) {
+    return this.#enqueue(() => this.#operate('collectLoot', params, options));
   }
 
   usePotion(potion, target, options) {
@@ -1291,101 +970,11 @@ export class Sts2 {
     return this.#request(kind, { potion: potion.ref, target: target?.ref }, options);
   }
 
-  async #point(control) {
-    // Scroll containers may clip choices that are present in the visible screen.
-    const ancestors = [];
-    let parent = await control.call('get_parent');
-    while (parent && ancestors.length < 20) {
-      if (await parent.call('is_class', 'ScrollContainer')) ancestors.push(parent);
-      parent = await parent.call('get_parent');
-    }
-    for (const ancestor of ancestors.reverse())
-      await ancestor.call('ensure_control_visible', control);
-    if (ancestors.length) await pause(60);
-    const [x, y, width, height] = (await control.call('get_global_rect')).args;
-    const { root } = await (await this.client.builtin('SceneTree')).invoke('current');
-    const [a, b, c, d, tx, ty] = (await root.call('get_final_transform')).args;
-    const cx = x + width / 2,
-      cy = y + height / 2;
-    return new GodotValue({ type: 'Vector2', args: [a * cx + c * cy + tx, b * cx + d * cy + ty] });
-  }
-
   choose(choice, options) {
     return this.#enqueue(() => this.#choose(choice, options), { trackDeck: true });
   }
 
-  async #choose(choice, { timeoutMs = 8000 } = {}) {
-    const before = await this.state();
-    const matches =
-      typeof choice === 'string'
-        ? before.choices.filter(
-            (item) => item.ref === choice || item.label.toLowerCase() === choice.toLowerCase(),
-          )
-        : before.choices.filter((item) => item.ref === choice?.ref);
-    if (matches.length !== 1)
-      throw Object.assign(
-        new Error('Choice is missing or ambiguous; use an object from state.choices'),
-        { code: 'STALE_CHOICE', state: before },
-      );
-
-    const current = matches[0];
-    if (typeof choice === 'object' && current.label !== choice.label)
-      throw Object.assign(
-        new Error('Choice reference now represents different content; observe again'),
-        { code: 'STALE_CHOICE', state: before },
-      );
-
-    if (!current.enabled)
-      throw Object.assign(new Error(current.blockedReason ?? 'That choice is disabled'), {
-        code: 'STALE_CHOICE',
-        state: before,
-      });
-
-    const control =
-      current.activation?.kind === 'select_card' ? null : this.client.object(current.ref);
-    const prior = fingerprint(before);
-    if (current.type === 'NBackButton' && before.shop?.open)
-      this.#browsedShop = before.shop.control;
-    await this.#pace();
-    const characterSelection = current.type === 'NCharacterSelectButton';
-    if (!characterSelection && !current.activation && !this.#nativeClicks.has(current.type)) {
-      this.#nativeClicks.set(
-        current.type,
-        (await control.inspect()).methods.some((method) => method.name === 'ForceClick'),
-      );
-    }
-    if (current.activation?.kind === 'select_card') {
-      await this.endpoint.invoke('select_card', { card: current.activation.card });
-    } else if (characterSelection) {
-      // Character buttons select on focus; ForceClick only emits click signals.
-      await control.call('Select');
-    } else if (current.activation) {
-      const { target, signal, argument } = current.activation;
-      await this.client.object(target).call('emit_signal', signal, this.client.object(argument));
-    } else if (this.#nativeClicks.get(current.type)) {
-      // The real UI handler avoids racing a moving control's entrance tween.
-      await control.call('ForceClick');
-    } else {
-      const input = await this.client.builtin('Input');
-      const position = await this.#point(control);
-      await input.moveMouseTo({ position, duration_ms: 120 });
-      try {
-        await input.invoke('press', { button: 'left', position });
-        await input.invoke('release', { button: 'left' });
-      } catch (error) {
-        await input.invoke('release', { button: 'left' }).catch(() => {});
-        throw error;
-      }
-    }
-    try {
-      const state = await this.waitFor((state) => state.ready && fingerprint(state) !== prior, {
-        timeoutMs,
-      });
-      return { status: 'observed_change', selectedChoice: choiceView(current), state };
-    } catch (error) {
-      if (!error.message.startsWith('Decision wait timed out')) throw error;
-
-      return { status: 'unconfirmed', state: await this.state(), warning: error.message };
-    }
+  async #choose(choice, options) {
+    return this.#operate('choose', { choice }, options);
   }
 }

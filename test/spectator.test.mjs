@@ -1,8 +1,45 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Sts2 } from '../sts2.mjs';
+import { ServiceSts2 as Sts2 } from './support/service.mjs';
 import { fixture, uiFixture, button } from './support/fixtures.mjs';
 import { EventEmitter } from 'node:events';
+import { isSettledObservation, observationBoundary } from '../spectator.mjs';
+
+test('a service work-order settles at its own stop, including inventory choices without a native action', () => {
+  const position = { screen: 'NRewardsScreen', ready: true, choices: [] };
+  assert.equal(isSettledObservation({ ...position, operation: { status: 'running' } }), false);
+  const stopped = { ...position, operation: { status: 'choice_required', atChoiceStop: true } };
+  assert.equal(isSettledObservation(stopped), true);
+  assert.equal(observationBoundary(stopped), 'choice_required');
+});
+
+test('a historical service choice does not label later human-driven positions as that stop', async () => {
+  const initial = {
+    screen: 'NRewardsScreen',
+    ready: true,
+    text: [],
+    choices: [button('cards', 'NRewardButton', 'Cards', { category: 'CardReward' })],
+  };
+  const { game, update } = uiFixture(initial, () =>
+    update({
+      screen: 'NCardRewardSelectionScreen',
+      ready: true,
+      text: [],
+      choices: [button('card', 'NGridCardHolder', 'Strike')],
+    }),
+  );
+  const result = await game.collectLoot();
+  assert.equal(result.status, 'choice_required');
+  const first = await game.spectate();
+  assert.equal(first.boundary, 'choice_required');
+  const next = game.spectate({ after: first, timeoutMs: 100 });
+  // Human input progresses without submitting another service operation.
+  update({ screen: 'NMapScreen', ready: true, text: [], choices: [], map: [] });
+  const frame = await next;
+  assert.equal(frame.view.kind, 'map');
+  assert.equal(frame.boundary, 'settled_position');
+  assert.equal((await game.state()).operation.status, 'choice_required');
+});
 
 test('spectate is passive and waits past text/layout churn for a new settled human-driven position', async () => {
   const initial = {

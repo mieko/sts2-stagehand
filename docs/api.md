@@ -26,6 +26,17 @@ generic `game` registration does not identify an StS2 wrapper.
   prompt text and travelable next rooms. Disabled choices remain visible.
   Full-inventory potion rewards/shop offers include `blockedReason`; discard/use
   first rather than clicking and waiting for a replacement picker the game lacks.
+- `info()` passively reports the native installed-game release version, commit,
+  branch, release date and native build-time main-assembly hash. Its source is the
+  game's `ReleaseInfoManager`, distinct from Godot engine/session metadata. Missing
+  metadata is explicitly unavailable; it works without an active run. Raw clients
+  use `inspect({kind: "game"})` on the Sts2 endpoint.
+- `recover()` passively waits for the last submitted operation and returns its
+  completed results, unsubmitted remainder and next decision after an interrupted
+  call. On a fresh connection it recovers the latest retained shared operation;
+  inspect that outcome, then explicitly `resumeQueue()` if appropriate. It never
+  replays or normalizes. Diagnostic `operation(id)` reads a retained service receipt;
+  its ID is distinct from the native action ID used by `waitForAction()`.
 - `state()` includes the complete visible map graph when open, raw UI types/bounds,
   and the latest tracked action. `state()`, `deck()`, `inspectCard()`, `piles()` and `waitFor()` are
   passive reads. `decision()` and command outcomes normalize the known forced UI
@@ -119,6 +130,8 @@ generic `game` registration does not identify an StS2 wrapper.
 - `choose(choiceOrExactLabel)` handles event options, rewards, rest options,
   chests/relics, menu/dialogue and other visible UI choices. Ambiguous names require
   the choice object. `pickCard(cardChoiceOrName)` handles reward/selection grids.
+  Choices use supported native handlers; an unknown control requires explicit
+  generic Stagehand input rather than an implicit semantic mouse fallback.
 - `travel(room)` takes a currently travelable room object. `proceed()` chooses one
   clear Proceed/Confirm/Continue/Embark/Leave control; it never silently skips a
   reward. `upgradeCard(card)` and `removeCard(card)` carry out an explicitly chosen
@@ -207,8 +220,10 @@ generic `game` registration does not identify an StS2 wrapper.
   `waitFor(predicate, {timeoutMs})` observes raw state via subscription, with a
   fresh state read after subscription setup. `waitForAction(action, {timeoutMs})`
   passively waits for that tracked action's completion or next explicit choice
-  and returns its state/decision; it does not execute or normalize UI. `screenshot()` returns a PNG Buffer
-  in `result.image`. `game.client` remains available for generic inspection/input.
+  and returns its state/decision; it does not execute or normalize UI. `screenshot()` returns
+  capture metadata (`width`, `height`, `mime`, and others) plus `image`, a PNG Buffer;
+  use `shot.image` when saving or displaying the captured image.
+  `game.client` remains available for generic inspection/input.
 - `close()` closes this connection. It does not quit the game or cancel an action
   that the game already accepted.
 
@@ -255,7 +270,11 @@ performs only these identified presentation steps, reporting `automaticSteps`:
 - Leave a rest site after no rest option remains and its Proceed control is enabled.
 - Leave an event only when the actual EventModel.IsFinished and option IsProceed
   flags establish completion. A Continue/Proceed label alone never suffices.
-- Advance enabled ancient dialogue until actual event options appear.
+- Advance Ancient dialogue only when this connection has explicitly enabled
+  `game.setDialogueAutoskip(true)`. The default is off: current speech and one
+  `advance_dialogue` choice are returned normally. Disable with
+  `game.setDialogueAutoskip(false)`; the preference belongs to that facade/session,
+  not the game or other connections. Autoskip stops at actual offers.
 - After the last Crystal Sphere use, wait for the native reward flow. Leave the
   finished sphere only after its native reward task enables Proceed.
 
@@ -268,8 +287,8 @@ of virtualized holders. The grid-owned filtered list also covers combat-pile
 pickers such as Hologram; the screen base list can deliberately be empty. Selection invokes the same native `OnCardClicked` handler
 connected to HolderPressed; hand choices use their Pressed signal, and ordinary controls their registered
 ForceClick handler; character selection uses its native Select operation (the game
-selects those controls on focus rather than a click signal). Generic mouse input
-is the fallback for controls without an exposed operation.
+selects those controls on focus rather than a click signal). Use generic Stagehand input explicitly for controls without a supported native
+operation; semantic `choose()` does not silently synthesize mouse input.
 
 Descriptions and effect meanings come from the current game models/localized hover
 tips. `[Energy]` represents the game's energy icon; a number of icons is preserved
@@ -281,11 +300,25 @@ or `"X"`; absent star costs are null. UI role names are the adapter's vocabulary
 Mutating helpers share one FIFO per `game`. Callers may submit several without
 awaiting between them; reads remain available while they execute. Waiting on a
 helper waits for its game outcome/next decision, not just JSON-RPC acceptance.
-Batches execute locally without another model turn per item. They are sequential
+Batches execute in the mod without another model turn per item. They are sequential
 game actions, not an atomic transaction; earlier successful actions remain applied.
 
-The host owns interaction readiness and tracked-action status. A card-choice
-overlay can be `ready: true` while ordinary `combat.ready` remains false, including
+The host owns interaction readiness, tracked-action status, ordered batches and
+forced settlement. See [service operations](operations.md) for the additive
+`operate`/`operation` wire calls. Public JS method/call shapes remain unchanged.
+Each `results[i].state` preserves that step’s historical snapshot, including
+nested selections, alongside the rich final `outcome.state`. Normal
+`present(outcome)` stays concise without removing these underlying facts;
+`{diagnostics: true}` additionally shows service tracking.
+
+Gameplay waits scale automatically with the service’s planned steps and pacing.
+Connection/handshake and individual RPC deadlines remain independent ten-second
+waits. An explicit local `timeoutMs` overrides only the gameplay wait for the
+operation. See [completion allowances](operations.md#lifetime-and-client-responsibilities)
+for defaults. An accepted plan continues after a caller
+disconnects; losing its response does not cancel the work.
+
+A card-choice overlay can be `ready: true` while ordinary `combat.ready` remains false, including
 choices awaited before normal drawing in the player's Start phase. Such a choice
 reports the original pending action as `choice_required`, then returns to running
 or completed as the native operation continues. Clients consume those facts rather
@@ -303,7 +336,8 @@ queue task they do not own.
 
 Timeouts, cancellations, failures and unconfirmed UI clicks stop further queued
 mutations. They never retry or pretend to cancel an accepted game action. Inspect
-`state()` and any error's `outcome`/batch `results`, then explicitly call
+`state()` and any error's `outcome`/batch `results`, or call passive `recover()`
+to await/read the submitted operation, then explicitly call
 `resumeQueue()` when appropriate. It refuses while the tracked game action is
 still accepted/running. Use `waitFor` to observe completion without sending another
 action. Every successful mutating helper includes a semantic `decision` from its
@@ -350,6 +384,23 @@ map graph and static relic inventory. Both default to false, so ordinary outcome
 and spectator views keep `nextRooms` and meaningful relic counters/stacks/status
 without repeating that bulk. These are pure output options, not a cache of prior
 positions. Full map/inventory inspection remains available in rich state.
+
+Defaults omit known-absent card fields, zero replay, routine upgrade/removal flags,
+cost scope and full preview provenance. Exceptions such as unremovable cards and
+unupgradable base cards remain visible. Costs (including zero), playability failures
+and reasons, modifiers, native values, copy counts and actionable refs remain.
+Reported zero resources/counters stay visible; no character-based filtering hides
+star-cost cards, pets or orbs. Unknown costs, values and incoming damage remain
+unknown rather than being treated as zero or none. Card grouping uses the full
+underlying variants before projection.
+
+`{diagnostics: true}` restores card metadata, full native value/context fields,
+effect definitions and inspection controls. Ordinary values are native model
+previews, not prospective per-target damage; inspect provenance when comparing
+contexts. Raw state, inspections and all intermediate/nested results are unchanged.
+Disabled choices with meaningful eligibility/affordability remain visible; Ping,
+pile/Peek inspection controls and an inactive End Turn without a blocker are
+omitted from ordinary selection views.
 
 The presenter groups genuinely identical cards with `count` and individual
 `refs`; pass `{ref: group.refs[1]}` to address another copy. Enchantments,
@@ -466,8 +517,12 @@ A native-ready choice is visible while its owning action remains pending, includ
 an enemy-turn card choice. A running combat action is not reported as completed.
 This works without an adapter action ID for human-driven changes.
 
-The boundary describes an observed game position, **not a global client-batch
-completion**. Another client may immediately start its next queued card. Existing
+A running service operation is not delivered as a settled frame; its real
+choice/completion stop is visible through `state.operation`. Its `atChoiceStop`
+flag matches the current position to the retained stop, so a historical
+`choice_required` receipt does not label later human-driven positions. The boundary still
+describes an observed game position, **not an entire higher-level client intention**. Another client may immediately
+start its next queued card. Existing
 host notifications are sampled/coalesced; fast intervening positions can be missed,
 and no-op inputs or a return to an indistinguishable position need not yield a
 frame. This is neither a log of every input nor proof that all animation has stopped.
@@ -475,12 +530,12 @@ There is no observer timer polling, replay or automatic reconnection.
 
 ## Spectating and ending a run
 
-`game.setSpectatorPacing(400)` adds a 400ms wall-time dwell before each local game
+`game.setSpectatorPacing(400)` adds a 400ms wall-time dwell before each game
 activation, including preview confirmations inside a queued plan. Default is zero;
 `game.setSpectatorPacing()` restores full speed. Range is 0–5000ms. This does not
 pause the game, require extra decisions or change completion conditions. Passive
 observations remain available during a dwell. It is a local client preference,
-not a game setting.
+not a saved game setting; service operations receive the selected dwell as `pacingMs`.
 
 `await game.abandonRun()` explicitly abandons an active single-player run through
 `RunManager.Abandon`, the same native operation used by the in-run confirmation

@@ -1,8 +1,180 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Sts2 } from '../sts2.mjs';
+import { ServiceSts2 as Sts2 } from './support/service.mjs';
+import { Sts2 as ClientSts2 } from '../sts2.mjs';
 import { fixture, uiFixture, button } from './support/fixtures.mjs';
 import { EventEmitter } from 'node:events';
+
+test('dialogue autoskip defaults off and follows only its own client session', async () => {
+  const requests = [];
+  function facade() {
+    const endpoint = {
+      async invoke(method, params) {
+        if (method === 'operate') {
+          requests.push(params);
+          return { operation: 'dialogue', status: 'accepted' };
+        }
+        return { outcome: { operation: 'dialogue', status: 'completed' } };
+      },
+    };
+    const game = new ClientSts2(new EventEmitter(), endpoint);
+    game.waitFor = async () => {};
+    return game;
+  }
+  const first = facade(),
+    second = facade();
+  await first.playCards([]);
+  first.setDialogueAutoskip(true);
+  await first.playCards([]);
+  await second.playCards([]);
+  first.setDialogueAutoskip();
+  await first.playCards([]);
+  assert.deepEqual(
+    requests.map((r) => r.autoSkipDialogue),
+    [false, true, false, false],
+  );
+  assert.throws(() => first.setDialogueAutoskip('yes'), TypeError);
+});
+
+test('an already-aborted local intent never submits a native action or service work-order', async () => {
+  for (const run of [
+    (game) => game.playCards(['Strike'], { signal: AbortSignal.abort() }),
+    (game) => game.endTurn({ signal: AbortSignal.abort() }),
+  ]) {
+    const endpoint = {
+      async invoke() {
+        assert.fail('No operation was submitted');
+      },
+    };
+    const game = new ClientSts2(new EventEmitter(), endpoint);
+    await assert.rejects(run(game), { name: 'AbortError' });
+  }
+});
+
+test('a local deadline does not cancel the accepted service work-order', async () => {
+  const { game, order } = fixture();
+  const error = await game
+    .playCards(['Strike', 'Strike'], { timeoutMs: 5 })
+    .catch((error) => error);
+  assert.match(error.message, /timed out/);
+  assert.equal(typeof error.operation, 'string');
+  await assert.rejects(game.endTurn(), /queue stopped/);
+  const recovered = await game.recover();
+  assert.equal(recovered.status, 'completed');
+  assert.equal(recovered.results.length, 2);
+  assert.equal(recovered.results[0].state.combat.hand[0].ref, 'card1');
+  assert.equal(recovered.results[1].state.combat.hand[0].ref, 'card2');
+  assert.equal(recovered.decision.kind, 'combat');
+  await game.resumeQueue();
+  assert.deepEqual(order, ['start:play', 'finish:play', 'start:play', 'finish:play']);
+});
+
+test('service completion budgets leave RPC parameters alone and explicit wait overrides still work', async () => {
+  const calls = [];
+  const endpoint = {
+    async invoke(method, params) {
+      calls.push({ method, params });
+      if (method === 'operate')
+        return { operation: 'batch', status: 'accepted', completionTimeoutMs: 240_000 };
+      return { status: 'completed', outcome: { operation: 'batch', status: 'completed' } };
+    },
+  };
+  const game = new ClientSts2(new EventEmitter(), endpoint);
+  const waits = [];
+  game.waitFor = async (_predicate, options) => waits.push(options.timeoutMs);
+  await game.playCards(['Strike', 'Strike']);
+  await game.playCards(['Strike'], { timeoutMs: 17 });
+  assert.deepEqual(waits, [240_000, 17]);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ['operate', 'operation', 'operate', 'operation'],
+  );
+  assert.equal(calls[0].params.timeoutMs, undefined);
+});
+
+test('a fresh facade can passively recover the latest stopped choice without IDs or mutation', async () => {
+  const endpoint = {
+    async invoke(method, params) {
+      assert.equal(method, 'operation');
+      assert.ok(params.operation === undefined || params.operation === 'latest');
+      return {
+        operation: 'latest',
+        status: 'choice_required',
+        outcome: {
+          status: 'choice_required',
+          results: [{ status: 'completed', state: { screen: 'before' } }],
+          remaining: ['Strike'],
+          state: {
+            screen: 'HandSelection',
+            ready: true,
+            choices: [],
+            selection: { min: 1, max: 1 },
+            pending: { action: 'parent', status: 'choice_required' },
+          },
+        },
+      };
+    },
+  };
+  const result = await new ClientSts2(new EventEmitter(), endpoint).recover();
+  assert.equal(result.status, 'choice_required');
+  assert.deepEqual(result.remaining, ['Strike']);
+  assert.equal(result.results[0].state.screen, 'before');
+  assert.equal(result.state.pending.action, 'parent');
+  assert.equal(result.decision.kind, 'card_selection');
+});
+
+test('service receipt inspection is passive and preserves partial outcome facts', async () => {
+  const endpoint = {
+    async invoke(method, params) {
+      assert.equal(method, 'operation');
+      assert.deepEqual(params, { operation: 'work' });
+      return {
+        operation: 'work',
+        status: 'failed',
+        outcome: {
+          status: 'failed',
+          results: [{ status: 'completed' }],
+          remaining: ['Missing'],
+          selectedChoice: { ref: 'one', type: 'NGridCardHolder', label: 'Defend' },
+        },
+      };
+    },
+  };
+  const game = new ClientSts2(new EventEmitter(), endpoint);
+  const receipt = await game.operation('work');
+  assert.equal(receipt.outcome.selectedChoice.kind, 'select_card');
+  assert.equal(receipt.outcome.results.length, 1);
+  assert.deepEqual(receipt.outcome.remaining, ['Missing']);
+});
+
+test('recover also waits for an interrupted single native action without resubmitting it', async () => {
+  const { game, order } = fixture();
+  await assert.rejects(game.endTurn({ timeoutMs: 1 }), /timed out/);
+  const outcome = await game.recover();
+  assert.equal(outcome.status, 'completed');
+  assert.equal(outcome.action, '1');
+  assert.deepEqual(order, ['start:endTurn', 'finish:endTurn']);
+  await game.resumeQueue();
+});
+
+test('an unavailable native post-action view reaches the facade as partial unknown progress without replay', async () => {
+  const { game, endpoint, cards } = fixture();
+  endpoint.nativeObserve = async () =>
+    cards.length >= 2 ? { value: { error: 'Projection failed' } } : endpoint.observe();
+  await assert.rejects(game.playCards(['Strike', 'Strike', 'Strike']), (error) => {
+    assert.equal(error.outcome.status, 'unconfirmed');
+    assert.equal(error.results.length, 2);
+    assert.equal(error.results[0].state.combat.hand[0].ref, 'card1');
+    assert.equal(error.results[1].action, '2');
+    assert.equal(error.results[1].state, null);
+    assert.deepEqual(error.remaining, ['Strike']);
+    return true;
+  });
+  const recovered = await game.recover();
+  assert.equal(recovered.status, 'unconfirmed');
+  assert.equal(recovered.results[1].action, '2');
+  assert.equal(cards.length, 2);
+});
 
 test('queued operations wait for game completion; observations remain available', async () => {
   const { game, order, listeners } = fixture();
@@ -183,25 +355,24 @@ for (const failure of ['unconfirmed', 'activation', 'read']) {
       choices: [proceed],
       rewards: { remaining: 0, complete: true },
     };
-    const { game, update, calls } = uiFixture(initial, (id) => {
+    const { game, update, calls, endpoint } = uiFixture(initial, (id) => {
       if (id === 'gold') update(empty);
       else if (failure === 'activation') throw new Error('Native control failed');
       else if (failure === 'unconfirmed') update({ ...empty, text: ['Still animating'] });
     });
-    const originalWait = game.waitFor.bind(game);
-    game.waitFor = async (predicate) => {
-      if (calls.includes('proceed')) {
-        if (failure === 'read') throw new Error('RPC read failed');
-
-        throw new Error('Decision wait timed out; no game action was cancelled or retried');
-      }
-
-      return originalWait(predicate, { timeoutMs: 100 });
+    endpoint.nativeObserve = async () => {
+      if (failure === 'read' && calls.includes('proceed')) throw new Error('Native read failed');
+      return endpoint.observe();
     };
     await assert.rejects(game.claimRewards([gold]), (error) => {
       assert.equal(error.outcome.results.length, 1);
       assert.equal(error.outcome.results[0].selectedChoice.ref, 'gold');
       assert.equal(error.outcome.state.player.gold, 20);
+      if (failure === 'read') {
+        assert.equal(error.outcome.stateScope, 'last_observed');
+        assert.equal(error.outcome.automaticOutcome.state, null);
+        assert.match(error.outcome.automaticOutcome.error, /Native read failed/);
+      }
       if (failure === 'unconfirmed')
         assert.deepEqual(error.outcome.state.text, ['Still animating']);
       assert.equal(error.outcome.automaticOutcome.kind, 'leave_empty_rewards');
@@ -906,7 +1077,10 @@ test('selection confirmation failure retains the already-applied selection', asy
             return { methods: [{ name: 'ForceClick' }] };
           },
           async call() {
-            throw new Error('Confirmation unavailable');
+            // The native port has established rejection before applying input.
+            throw Object.assign(new Error('Confirmation unavailable'), {
+              activationRejected: true,
+            });
           },
         }
       : object(id);
@@ -1048,67 +1222,35 @@ test('end-turn failure retains the preceding successful card batch', async () =>
 });
 
 for (const kind of ['play', 'buy', 'reward']) {
-  test(`${kind} batch reuses its completed snapshot without a redundant fallible read`, async () => {
+  test(`${kind} batch reuses its service completion snapshot without another fallible read`, async () => {
     const client = new EventEmitter();
-    let completed = false,
-      delivered = false;
-    const initial =
-      kind === 'play'
-        ? {
-            screen: 'NCombatRoom',
-            choices: [],
-            combat: { hand: [{ name: 'Defend', ref: 'card', cost: 1 }] },
-          }
-        : {
-            screen: kind === 'buy' ? 'NMerchantInventory' : 'NRewardsScreen',
-            choices: [
-              {
-                ...button('item', kind === 'buy' ? 'NMerchantCard' : 'NRewardButton', 'Item'),
-                offerRef: 'offer',
-              },
-            ],
-          };
+    let delivered = false;
+    const state = { screen: 'NCombatRoom', choices: [], ready: true, combat: { hand: [] } };
     const endpoint = {
       async observe() {
         if (delivered) throw new Error('Connection lost after completed observation');
-
-        if (completed) delivered = true;
-        return {
-          value: {
-            ...initial,
-            ready: true,
-            text: [],
-            ...(completed
-              ? {
-                  pending: { action: 'action', status: 'completed' },
-                  ...(kind === 'reward'
-                    ? {
-                        choices: [button('other', 'NRewardButton', 'Other')],
-                        rewards: { remaining: 1, unresolved: 1, complete: false },
-                      }
-                    : {}),
-                }
-              : {}),
-          },
-        };
+        delivered = true;
+        return { value: { ...state, operation: { operation: 'batch', status: 'completed' } } };
       },
       async subscribe() {
         return async () => {};
       },
-      async invoke() {
-        completed = true;
-        return { action: 'action', status: 'accepted' };
+      async invoke(method, params) {
+        if (method === 'operate') return { operation: 'batch', status: 'accepted' };
+        assert.equal(method, 'operation');
+        assert.equal(params.operation, 'batch');
+        return {
+          outcome: {
+            status: 'completed',
+            operation: 'batch',
+            state,
+            results: [{ status: 'completed' }],
+            remaining: [],
+          },
+        };
       },
     };
-    client.object = () => ({
-      async inspect() {
-        return { methods: [{ name: 'ForceClick' }] };
-      },
-      async call() {
-        completed = true;
-      },
-    });
-    const game = new Sts2(client, endpoint);
+    const game = new ClientSts2(client, endpoint);
     const result =
       kind === 'play'
         ? await game.playCards(['Defend'])
@@ -1117,6 +1259,7 @@ for (const kind of ['play', 'buy', 'reward']) {
           : await game.claimRewards(['Item']);
     assert.equal(result.status, 'completed');
     assert.equal(result.results.length, 1);
+    assert.equal(delivered, true);
   });
 }
 
@@ -2096,7 +2239,7 @@ test('collectLoot does not open a card offer after an unconfirmed claim', async 
     },
     () => {},
   );
-  await assert.rejects(game.collectLoot({}, { timeoutMs: 5 }), (error) => {
+  await assert.rejects(game.collectLoot({}, { timeoutMs: 15000 }), (error) => {
     assert.equal(error.outcome.status, 'unconfirmed');
     assert.equal(error.outcome.results.length, 1);
     return true;
@@ -2118,7 +2261,7 @@ test('an unconfirmed collectLoot card opening stops the queue and retains applie
     },
   );
   const results = await Promise.allSettled([
-    game.collectLoot({}, { timeoutMs: 5 }),
+    game.collectLoot({}, { timeoutMs: 15000 }),
     game.choose(special),
   ]);
   assert.equal(results[0].status, 'rejected');

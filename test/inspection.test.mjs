@@ -3,6 +3,23 @@ import { test } from 'node:test';
 import { Sts2 } from '../sts2.mjs';
 import { EventEmitter } from 'node:events';
 
+test('game release info is a passive native inspection, separate from engine metadata', async () => {
+  const facts = {
+    source: 'native_release_info',
+    available: true,
+    version: 'v0.107.1',
+    commit: '59260271',
+  };
+  const game = new Sts2(new EventEmitter(), {
+    async invoke(method, params) {
+      assert.equal(method, 'inspect');
+      assert.deepEqual(params, { kind: 'game' });
+      return facts;
+    },
+  });
+  assert.equal(await game.info(), facts);
+});
+
 test('card inspection accepts observed reward, shop, selection and compact models without driving or rereading', async () => {
   const calls = [];
   const projected = {

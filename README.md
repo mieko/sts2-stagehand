@@ -69,12 +69,25 @@ returns `choice_required` with applied progress, allowing explicit inventory
 handling without queue recovery. `game.present(result)`
 is the compact, pure view of an existing outcome—no extra read or normalization.
 It keeps next rooms and live relic counters; `{map: true, inventory: true}` opts
-into the full graph and static inventory.
+into the full graph and static inventory. `{diagnostics: true}` restores detailed
+card metadata and inspection controls. Defaults keep actual costs, modifiers,
+playability failures, copy counts and changing resources without repeating absent
+fields or preview provenance. Rich results and histories remain unchanged.
 
 Choose actual legal cards/targets from the current observation. Exact names work
 when unambiguous; pass a specific object for variants. `buy([itemA, itemB])` and
-other batches execute locally in order, without another model turn per item.
+other batches execute in the mod in order, without another model turn per item.
 Stop and inspect a new choice or failure; successful earlier actions remain applied.
+Results retain each step’s historical state as well as the final state; `present()`
+summarizes without printing those snapshots. Gameplay waits scale with the batch,
+independently of connection/RPC deadlines. After an interrupted call,
+`await game.recover()` retrieves the submitted operation’s outcome without replay;
+inspect it before explicitly resuming a stopped queue.
+
+Ancient conversations normally return the current speech and one advance choice.
+For a bot that wants to advance them automatically, opt in once per connection:
+`game.setDialogueAutoskip(true)`. It stops at actual offers and retains speech
+in the outcome; chest and other forced UI settlement is independent.
 
 To compare an offered card with its upgrade before choosing or buying it, use
 `await game.inspectCard(offer, {upgrades: true})`. This passive read uses the native
@@ -101,8 +114,8 @@ frame; subsequent `observer.spectate({after: frame, timeoutMs: 20000})` calls wa
 for a new meaningful position. An idle timeout returns null; keep the previous
 frame as the continuation. Print a returned frame's `view`. It does not normalize or drive
 the UI, and a real choice remains visible while its original action is pending.
-Keep the frame object in the same persistent JS session. Per-action positions do
-not claim another client's whole batch has ended.
+Keep the frame object in the same persistent JS session. Settled positions do
+not claim another client's whole local queue has ended.
 
 See [the API](docs/api.md) for semantic state, effects/enchantments/afflictions,
 queue and failure semantics, potions/shopkeepers, rewards/events and explicit
@@ -114,13 +127,15 @@ results/epoch/unlock handling. `state()`, `deck()`, `inspectCard()` and `piles()
 The native mod creates a Stagehand bridge, registers one game object, and supplies
 callbacks for observing state and executing native operations. The external client
 wraps that object with the semantic API; it uses the ordinary generic client for
-discovery, calls, subscriptions, screenshots and input fallback.
+discovery, calls, subscriptions and screenshots. Its generic client remains
+available for explicit input fallback.
 
 | File | Responsibility |
 | --- | --- |
 | [Entry.cs](Entry.cs) | Attach and enable the runtime bridge; clean it up if installation fails. |
 | [sts2.gd](sts2.gd) | Register `Sts2`, its methods, observation callback and `changed` event. |
 | [Sts2Host.cs](Sts2Host.cs) | Address current game objects, read active UI, execute native actions and report completion. |
+| [WorkflowService.cs](WorkflowService.cs) | Execute bounded plans, choices and forced settlement for every client language. |
 | [ModelProjection.cs](ModelProjection.cs) | Turn native models into public card, effect and status facts without owning game objects. |
 | [sts2.mjs](sts2.mjs) | Install the wrapper factory and expose queued semantic operations. |
 | [decision.mjs](decision.mjs), [present.mjs](present.mjs), [spectator.mjs](spectator.mjs) | Pure decision/presentation transforms and settled-observation comparisons. |
@@ -128,6 +143,9 @@ discovery, calls, subscriptions, screenshots and input fallback.
 For another Godot game, the small registration in `sts2.gd` and the wrapper
 factory in `sts2.mjs` are the integration pattern. The native game knowledge lives
 in this consumer, alongside the facade that names useful operations for clients.
+
+See [service operations](docs/operations.md) for the language-neutral wire API,
+completion, partial results and client lifetime semantics.
 
 ## Build the mod
 
@@ -192,14 +210,24 @@ npm test
 npm run test:host
 ```
 
+For fast presenter-only iteration, use `npm run test:presentation` (no game or
+managed test-service build).
+
 The JS suite groups connection, inspection, actions, presentation and spectator
 behavior under `test/`; `npm test` also runs the offline Python launcher checks.
 These use temporary fake app executables, not a game installation. The JS checks
-cover queues, completion, explicit choices and partial progress.
-The pure C# test links the production unordered-card ordering helper and needs no game
-DLLs or running game; it uses .NET 10. Build the complete host against the selected
+cover queues, completion, explicit choices and partial progress. They run the real
+managed workflow service through a test-only JSON fixture with fake native ports.
+`npm test` therefore also needs .NET SDK 10; it runs the direct service checks and
+builds that fixture before the JS tests. No game or engine runs in these checks.
+The separate `test:host` pure C# test links the production unordered-card ordering
+helper and needs no game DLLs or running game; it uses .NET 10. Build the complete host against the selected
 game assemblies after managed changes. Live game checks must use a disposable
 isolated instance and be coordinated with its user.
+
+Check the actual GDScript registration in a temporary game-free project with
+`npm run test:registration -- --godot "$GODOT45"`. This also verifies that status
+reads cannot enter the mutation callback.
 
 After building the host, check native models and selection ownership against the selected game
 assemblies without launching a game:
