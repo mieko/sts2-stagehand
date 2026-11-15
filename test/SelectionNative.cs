@@ -100,6 +100,34 @@ if (original.IsUpgraded || original.DynamicVars.Damage.BaseValue != 3 || origina
     throw new Exception("Detached upgrade preview mutated or retained mutable source state");
 Console.WriteLine("Native enchanted upgrade preview: 6→8, source card/enchantment untouched");
 
+// A reward is not in the deck. Its native model still supports the same detached
+// preview, including keyword-only upgrades that have no numeric value change.
+var offered = (KnowThyPlace)Shell(typeof(KnowThyPlace));
+Mutable(offered);
+Field(offered, typeof(CardModel), "_keywords", new HashSet<CardKeyword> { CardKeyword.Exhaust });
+Field(offered, typeof(CardModel), "_temporaryStarCosts", new List<TemporaryCardCost>());
+Field(offered, typeof(CardModel), "_canonicalInstance", offered);
+Field(offered, typeof(CardModel), "_owner", owner);
+Field(offered, typeof(CardModel), "_energyCost", new CardEnergyCost(offered, 0, false));
+var offeredVars = new DynamicVarSet([
+    new PowerVar<MegaCrit.Sts2.Core.Models.Powers.WeakPower>(1m),
+    new PowerVar<MegaCrit.Sts2.Core.Models.Powers.VulnerablePower>(1m) ]);
+offeredVars.InitializeWithOwner(offered);
+Field(offered, typeof(CardModel), "_dynamicVars", offeredVars);
+var offerPreview = (CardModel)makePreview.Invoke(null, [offered])!;
+if (!offerPreview.IsUpgraded || offerPreview.Keywords.Contains(CardKeyword.Exhaust)
+    || offerPreview.DynamicVars.Weak.BaseValue != 1 || offerPreview.DynamicVars.Vulnerable.BaseValue != 1
+    || offerPreview.EnergyCost.GetWithModifiers(CostModifiers.Local) != 0
+    || offerPreview.UpgradePreviewType != CardUpgradePreviewType.Deck)
+    throw new Exception("Unowned Know Thy Place preview must remove only Exhaust, at native deck-preview scope");
+if (offered.IsUpgraded || !offered.Keywords.Contains(CardKeyword.Exhaust)
+    || offered.DynamicVars.Weak.BaseValue != 1 || offered.DynamicVars.Vulnerable.BaseValue != 1
+    || offered.EnergyCost.GetWithModifiers(CostModifiers.Local) != 0
+    || ReferenceEquals(offered.DynamicVars, offerPreview.DynamicVars)
+    || ReferenceEquals(offered.EnergyCost, offerPreview.EnergyCost) || offered.Pile != null)
+    throw new Exception("Offered-card upgrade inspection mutated or attached the unowned source model");
+Console.WriteLine("Native unowned Know Thy Place preview: Exhaust removed, costs/debuffs and source unchanged");
+
 var freeCard = (NeutronAegis)Shell(typeof(NeutronAegis));
 Mutable(freeCard);
 Field(freeCard, typeof(CardModel), "_temporaryStarCosts", new List<TemporaryCardCost>());

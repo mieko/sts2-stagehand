@@ -129,6 +129,13 @@ export class Sts2 {
   constructor(client, endpoint) { this.client = client; this.endpoint = endpoint; }
   async state() { return (await this.endpoint.observe()).value; }
   async deck({ upgrades = false } = {}) { return (await this.endpoint.invoke('inspect', { kind: 'deck', upgrades })).cards; }
+  async inspectCard(card, { upgrades = false } = {}) {
+    const model = card?.detail?.item ?? card?.detail ?? card?.model ?? card;
+    const ref = typeof card === 'string' ? card : card?.cardRef ?? model?.ref;
+    if (typeof ref !== 'string' || !ref)
+      throw new TypeError('Pass an observed card or offer with a card reference');
+    return this.endpoint.invoke('inspect', { kind: 'card', card: ref, upgrades });
+  }
   async piles() { return this.endpoint.invoke('inspect', { kind: 'piles' }); }
   async decision({ wait = false, ...options } = {}) {
     const state = wait ? await this.waitFor(s => s.ready, options) : await this.state();

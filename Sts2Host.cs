@@ -802,9 +802,16 @@ public sealed class Sts2Host
             var player = Player ?? throw new InvalidOperationException("No run in progress");
             using var document = JsonDocument.Parse(json);
             var kind = document.RootElement.GetProperty("kind").GetString();
+            var upgrades = document.RootElement.TryGetProperty("upgrades", out var option) && option.ValueKind == JsonValueKind.True;
+            if (kind == "card")
+            {
+                var id = document.RootElement.GetProperty("card").GetString()!;
+                if (!_cards.TryGetValue(id, out var card))
+                    throw new InvalidOperationException("Card reference is unknown; inspect a current card or offer again");
+                return Serialize(Card(card, upgrade: upgrades));
+            }
             if (kind == "deck")
             {
-                var upgrades = document.RootElement.TryGetProperty("upgrades", out var option) && option.ValueKind == JsonValueKind.True;
                 foreach (var old in _deckRefs.Keys.ToArray()) if (!player.Deck.Cards.Contains(old)) _deckRefs.Remove(old);
                 return Serialize(new { Cards = player.Deck.Cards.Select(c => Card(c, upgrade: upgrades, deckReference: true)).ToArray() });
             }

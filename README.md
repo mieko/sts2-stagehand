@@ -74,6 +74,11 @@ when unambiguous; pass a specific object for variants. `buy([itemA, itemB])` and
 other batches execute locally in order, without another model turn per item.
 Stop and inspect a new choice or failure; successful earlier actions remain applied.
 
+To compare an offered card with its upgrade before choosing or buying it, use
+`await game.inspectCard(offer, {upgrades: true})`. This passive read uses the native
+detached preview and leaves the offered card unchanged; the returned `upgrade`
+contains the alternative when the card can be upgraded.
+
 For ordinary Node, use `import {connectLocal} from './local.mjs'`. An explicit
 connection is also available through `connectSts2(url, {token, WebSocket})` in
 `sts2.mjs`. No Codex dependency. `local.mjs` supplies `ws` when the environment lacks
@@ -91,7 +96,7 @@ not claim another client's whole batch has ended.
 
 See [the API](docs/api.md) for semantic state, effects/enchantments/afflictions,
 queue and failure semantics, potions/shopkeepers, rewards/events and explicit
-results/epoch/unlock handling. `state()`, `deck()` and `piles()` are passive reads;
+results/epoch/unlock handling. `state()`, `deck()`, `inspectCard()` and `piles()` are passive reads;
 `decision()`/`ready()` may advance documented presentation-only UI.
 
 ## Build the mod

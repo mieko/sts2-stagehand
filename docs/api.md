@@ -6,7 +6,7 @@
   Full-inventory potion rewards/shop offers include `blockedReason`; discard/use
   first rather than clicking and waiting for a replacement picker the game lacks.
 - `state()` includes the complete visible map graph when open, raw UI types/bounds,
-  and the latest tracked action. `state()`, `deck()`, `piles()` and `waitFor()` are
+  and the latest tracked action. `state()`, `deck()`, `inspectCard()`, `piles()` and `waitFor()` are
   passive reads. `decision()` and command outcomes normalize the known forced UI
   steps below; a semantic decision read may therefore open a mandatory chest or
   advance a completed event.
@@ -46,6 +46,19 @@
   upgrade UI, and leave the source card, enchantment and deck unchanged. `piles()`
   returns discard/exhaust and the public draw-pile contents sorted with
   `draw.order: "unknown"`; it never supplies shuffled draw order.
+- `inspectCard(cardOrOffer, {upgrades: true})` passively inspects an already observed
+  card, including unowned reward/shop offers and selection cards. Pass the card,
+  raw/compact choice object or opaque card reference; exact card names and catalog
+  IDs are not references. It returns the same rich card projection used by `deck()`.
+  `upgrade` contains its native next-upgrade alternative when eligible; omit
+  `upgrades` to inspect just the current model. The alternative is a detached
+  preview, with no actionable reference or playability claim. Costs reflect the
+  model's current modifiers and native deck/combat preview context, not a promise
+  about payment after acquisition or a later turn. Inspection does not acquire,
+  upgrade, select or click the card and does not enter the mutation queue. References
+  reset at combat boundaries/reload; use a fresh observation if a reference expires.
+  Related-card hover tips without a reference remain printed facts, not catalog
+  lookup handles.
 - `endTurn()`, `usePotion(potion, enemy?)`, `discardPotion(potion)` use real game
   operations, returning their observed outcome and resulting state. End-turn can
   return `choice_required` for a real enemy-turn or start-of-turn card choice; the turn remains in
@@ -155,6 +168,13 @@
   that the game already accepted.
 
 Examples, each usable as a later independent tool invocation:
+
+```js
+// At an already observed card reward; does not choose the offer.
+var offer = d.choices.find(choice => choice.label === 'Know Thy Place');
+var card = await game.inspectCard(offer, {upgrades: true});
+console.log({current: card.description, upgraded: card.upgrade?.description});
+```
 
 ```js
 var d = await game.decision();
