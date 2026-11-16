@@ -185,6 +185,141 @@ var cases = new (string Name, Action Test)[]
         g.Equal(g.Outcome["results"]![0]!["selectedChoice"]!["ref"]!.GetValue<string>(), "standard");
         g.Equal(g.Outcome["error"]!.GetValue<string>().Contains("locked"), true);
     }),
+    ("retention confirmation waits for the same resumed turn beyond the UI acknowledgment budget", () =>
+    {
+        var g = new Game();
+        g.Selection();
+        g.State["screen"] = "HandSelection";
+        g.State["pending"] = JsonNode.Parse("""{"action":"turn","kind":"endTurn","status":"choice_required"}""");
+        g.OnChoose = choice =>
+        {
+            if (choice["ref"]!.GetValue<string>() != "confirm")
+            {
+                choice["selected"] = true;
+                g.State["choices"]!.AsArray().Last()!["enabled"] = true;
+
+                return;
+            }
+
+            g.State["screen"] = "NCombatRoom";
+            g.State["selection"] = null;
+            g.State["choices"] = new JsonArray();
+            g.State["ready"] = false;
+            g.State["pending"]!["status"] = "running";
+        };
+
+        g.Submit("""{"kind":"selectCards","cards":"Defend"}""");
+        g.Tick();
+        for (var frame = 0; frame < 90; frame++)
+            g.Tick();
+
+        g.Is("running");
+        g.Equal(g.Clicks.Count, 2);
+        g.Equal(g.Requests.Count, 0);
+
+        g.Finish();
+        g.Is("completed");
+        var results = g.Outcome["results"]!.AsArray();
+        g.Equal(results[0]!["state"]!["choices"]![0]!["selected"]!.GetValue<bool>(), true);
+        g.Equal(results[1]!["selectedChoice"]!["ref"]!.GetValue<string>(), "confirm");
+        g.Equal(g.Outcome["state"]!["pending"]!["action"]!.GetValue<string>(), "turn");
+        g.Equal(g.Outcome["state"]!["pending"]!["status"]!.GetValue<string>(), "completed");
+    }),
+    ("a closed selection without evidence of its original parent resuming stays unconfirmed", () =>
+    {
+        foreach (var pending in new[]
+        {
+            """{"action":"different","status":"running"}""",
+            """{"action":"turn","status":"choice_required"}"""
+        })
+        {
+            var g = new Game();
+            g.Selection();
+            g.State["pending"] = JsonNode.Parse("""{"action":"turn","status":"choice_required"}""");
+            g.State["choices"]!.AsArray().Last()!["enabled"] = true;
+            g.OnChoose = _ =>
+            {
+                g.State["screen"] = "NCombatRoom";
+                g.State["selection"] = null;
+                g.State["choices"] = new JsonArray();
+                g.State["ready"] = false;
+                g.State["pending"] = JsonNode.Parse(pending);
+            };
+
+            g.Submit("""{"kind":"selectCards","cards":[]}""");
+            g.Tick();
+            for (var frame = 0; frame < 90; frame++)
+                g.Tick();
+
+            g.Is("unconfirmed");
+            g.Equal(g.Clicks.Count, 1);
+            g.Equal(g.Outcome["results"]![0]!["selectedChoice"]!["ref"]!.GetValue<string>(), "confirm");
+            g.Equal(g.Requests.Count, 0);
+        }
+    }),
+    ("resumed selection parents preserve failure, cancellation and a subsequent required choice", () =>
+    {
+        foreach (var status in new[] { "failed", "cancelled", "choice_required" })
+        {
+            var g = new Game();
+            g.Selection();
+            g.State["pending"] = JsonNode.Parse("""{"action":"turn","status":"choice_required"}""");
+            g.State["choices"]!.AsArray().Last()!["enabled"] = true;
+            g.OnChoose = _ =>
+            {
+                g.State["screen"] = "NCombatRoom";
+                g.State["selection"] = null;
+                g.State["choices"] = new JsonArray();
+                g.State["ready"] = false;
+                g.State["pending"]!["status"] = "running";
+            };
+
+            g.Submit("""{"kind":"selectCards","cards":[]}""");
+            g.Tick();
+            g.Finish(status, () =>
+            {
+                if (status == "failed")
+                    g.State["pending"]!["error"] = "Native failure";
+                if (status == "choice_required")
+                    g.Selection();
+            });
+
+            g.Is(status);
+            g.Equal(g.Outcome["action"]!.GetValue<string>(), "turn");
+            g.Equal(g.Clicks.Count, 1);
+            if (status == "failed")
+                g.Equal(g.Outcome["error"]!.GetValue<string>(), "Native failure");
+        }
+    }),
+    ("confirmation exposes an immediate next selection under the same parent", () =>
+    {
+        foreach (var operation in new[]
+        {
+            """{"kind":"selectCards","cards":[]}""",
+            """{"kind":"choose","choice":{"ref":"confirm"}}"""
+        })
+        {
+            var g = new Game();
+            g.Selection();
+            g.State["pending"] = JsonNode.Parse("""{"action":"turn","status":"choice_required"}""");
+            g.State["choices"]!.AsArray().Last()!["enabled"] = true;
+            g.OnChoose = _ =>
+            {
+                g.Selection();
+                g.State["selection"]!["prompt"] = "Choose another card";
+            };
+
+            g.Submit(operation);
+            g.Tick();
+
+            g.Is("choice_required");
+            g.Equal(g.Outcome["action"]!.GetValue<string>(), "turn");
+            g.Equal(g.Outcome["state"]!["selection"]!["prompt"]!.GetValue<string>(), "Choose another card");
+            g.Equal(g.Outcome["state"]!["pending"]!["status"]!.GetValue<string>(), "choice_required");
+            g.Equal(g.Clicks.Count, 1);
+            g.Equal(g.Requests.Count, 0);
+        }
+    }),
     ("Ancient dialogue is an explicit decision by default and autoskip is an operation preference", () =>
     {
         var g = new Game(); g.Rewards(); g.State["screen"] = "NEventRoom";

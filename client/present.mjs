@@ -338,7 +338,10 @@ export function present(value, { map = false, inventory = false, diagnostics = f
               !d.dialogue?.text?.includes(line) &&
               !choices.some((choice) => choice.label === line),
           ),
-      pending: d.pending,
+      pending:
+        !diagnostics && d.pending?.status === 'completed' && d.pending.error == null
+          ? undefined
+          : d.pending,
       operation: diagnostics ? d.operation : undefined,
     },
     false,

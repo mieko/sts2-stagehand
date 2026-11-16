@@ -215,6 +215,8 @@ hover tips keep names/related-card facts/mechanics without repeating full defini
 event/Ancient offers retain effect definitions. `{diagnostics: true}` restores card
 metadata, full value/context/effect fields, inspection controls and service tracking.
 Rich states and historical results are unchanged; this is a stateless projection.
+Completed, error-free last actions are omitted from `pending` unless diagnostics
+are enabled; active parents, failures and cancellations remain visible.
 
 | State | Interpretation |
 | --- | --- |

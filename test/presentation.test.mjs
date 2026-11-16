@@ -1,6 +1,44 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+test('ready shop omits a completed historical action while raw and diagnostic history retain it', async () => {
+  const { present } = await import('../client/present.mjs');
+  const pending = { action: 'last-strike', kind: 'play', status: 'completed', error: null };
+  const state = { kind: 'shop', ready: true, choices: [], pending };
+  const raw = {
+    status: 'completed',
+    decision: state,
+    state,
+    results: [{ status: 'completed', state }],
+  };
+  const before = JSON.stringify(raw);
+
+  assert.equal(Object.hasOwn(present(raw), 'pending'), false);
+  assert.equal(Object.hasOwn(present(state), 'pending'), false);
+  assert.deepEqual(present(raw, { diagnostics: true }).pending, pending);
+  assert.deepEqual(raw.results[0].state.pending, pending);
+  assert.equal(JSON.stringify(raw), before);
+});
+
+test('compact pending preserves active parents, failures, cancellation and unexpected error facts', async () => {
+  const { present } = await import('../client/present.mjs');
+  for (const status of ['accepted', 'running', 'choice_required', 'failed', 'cancelled']) {
+    const pending = {
+      action: 'parent',
+      kind: 'endTurn',
+      status,
+      error: status === 'failed' ? 'Native failure' : null,
+    };
+    const state = { kind: 'card_selection', choices: [], selection: { min: 1, max: 1 }, pending };
+    const view = present(state);
+    assert.equal(view.pending.action, pending.action);
+    assert.equal(view.pending.status, status);
+    if (pending.error) assert.equal(view.pending.error, pending.error);
+  }
+  const pending = { action: 'inconsistent', status: 'completed', error: 'Reported error' };
+  assert.deepEqual(present({ choices: [], pending }).pending, pending);
+});
+
 test('compact output retains native parent correlation without dumping history or service tracking', async () => {
   const { present } = await import('../client/present.mjs');
   const value = {

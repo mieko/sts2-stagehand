@@ -229,16 +229,31 @@ internal sealed class WorkflowService(
             _browsedShop = Text(before["shop"], "control");
 
         var prior = Fingerprint(before);
+        var parent = CardSelection(before) && Text(before["pending"], "status") == "choice_required"
+            ? Text(before["pending"], "action") : "";
         await Pace();
         // Revalidate after pacing; it is never safe to activate a recycled UI reference.
         var current = CurrentChoice(Read(), choice);
+        var confirmsParent = parent != "" && Text(current, "type") == "NConfirmButton";
 
         JsonObject result;
         try
         {
             activate(current);
-            var state = await Wait(s => Flag(s, "ready") && Fingerprint(s) != prior, 8000);
-            result = Result("observed_change", state);
+            var state = await Wait(s => Flag(s, "ready") && Fingerprint(s) != prior
+                || SelectionResumed(s, parent), 8000);
+            if (SelectionResumed(state, parent)
+                || confirmsParent && Text(state["pending"], "action") == parent)
+            {
+                // Closing a native selection acknowledges the UI input. The resumed
+                // parent still owns enemy turns, animations and subsequent choices;
+                // a confirmation can reach that next choice without a running frame.
+                result = await WaitAction(parent);
+                if (Text(result, "status") == "completed")
+                    result["status"] = "observed_change";
+            }
+            else
+                result = Result("observed_change", state);
         }
         catch (Exception error) when (error is not ActivationRejected) { result = Unconfirmed(error); }
         result["selectedChoice"] = choice.DeepClone();
@@ -866,6 +881,9 @@ internal sealed class WorkflowService(
     private static bool CardSelection(JsonObject state) => state["selection"] != null || Text(state, "screen") == "HandSelection"
         || Text(state, "screen") != "NCardRewardSelectionScreen" && Text(state, "screen").Contains("Select")
         && Choices(state).Any(c => Text(c, "type").Contains("CardHolder"));
+    private static bool SelectionResumed(JsonObject state, string parent) => parent != ""
+        && !CardSelection(state) && Text(state["pending"], "action") == parent
+        && Text(state["pending"], "status") is "running" or "completed" or "failed" or "cancelled";
     private static bool ShopEntrance(JsonObject state) =>
         Text(state, "screen") is "NMerchantRoom" or "NEventRoom" && state["shop"] != null;
     private static bool SameName(string name, string? wanted) =>

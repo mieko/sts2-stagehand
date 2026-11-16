@@ -112,6 +112,11 @@ same parent action before continuing. Standalone `selectCards` with `confirm: fa
 completes selections only, not the suspended parent. Combat ending stops unused
 plays and suppresses end-turn. Full potion inventory is a `choice_required` stop
 for rewards/shop buys, retaining earlier progress without failing the JS FIFO.
+When a selection closes and its same native parent resumes, UI acknowledgment is
+complete; waiting for that parent's turn/animation completion uses the gameplay
+wait rather than the eight-second UI acknowledgment bound.
+A confirmation that immediately reaches another selection returns `choice_required`
+with the same parent action, even without an observable intermediate running frame.
 
 Forced settlement follows native completion/enabled controls, never a button label
 alone. It does not choose optional cards/relics, acknowledge tutorials or reveal
