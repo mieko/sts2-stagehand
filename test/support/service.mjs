@@ -38,11 +38,16 @@ function command(params) {
                   result = (await (endpoint.nativeObserve ?? endpoint.observe).call(endpoint))
                     .value;
                 if (value.call === 'request') result = await endpoint.invoke('request', value.args);
-                if (value.call === 'browse')
-                  result = await client.object(value.args).call('OpenInventory');
+                if (['browse', 'travel', 'popMenu'].includes(value.call)) {
+                  if (endpoint[value.call]) result = await endpoint[value.call](value.args);
+                  else if (value.call === 'browse')
+                    result = await client.object(value.args).call('OpenInventory');
+                  else throw new Error(`Missing native fixture port: ${value.call}`);
+                }
                 if (value.call === 'activate') {
                   const choice = value.args;
-                  if (choice.activation?.kind === 'select_card')
+                  if (endpoint.activate) result = await endpoint.activate(choice);
+                  else if (choice.activation?.kind === 'select_card')
                     result = await endpoint.invoke('select_card', { card: choice.activation.card });
                   else if (choice.activation) {
                     const { target, signal, argument } = choice.activation;

@@ -4,6 +4,187 @@ using Stagehand.Sts2;
 
 var cases = new (string Name, Action Test)[]
 {
+    ("travel rejects a stale room before native activation", () =>
+    {
+        var g = new Game();
+        g.State["screen"] = "NMapScreen";
+        g.State["map"] = JsonNode.Parse("""[{"ref":"current","state":"Travelable"}]""");
+
+        g.Submit("""{"kind":"travel","room":{"ref":"stale"}}""");
+        g.Tick();
+
+        g.Is("failed");
+        g.Equal(g.Outcome["error"]!.GetValue<string>().Contains("travelable"), true);
+        g.Equal(g.Clicks.Count, 0);
+    }),
+    ("menu return refuses an active unlock before any native input", () =>
+    {
+        var g = new Game();
+        g.State["navigation"] = JsonNode.Parse("""{"atMainMenu":false,"canReturnToMenu":false}""");
+
+        g.Submit("""{"kind":"returnToMenu"}""");
+        g.Tick();
+
+        g.Is("failed");
+        g.Equal(g.Outcome["error"]!.GetValue<string>().Contains("unavailable"), true);
+        g.Equal(g.Clicks.Count, 0);
+    }),
+    ("travel revalidates a room after pacing and never activates an illegal target", () =>
+    {
+        var g = new Game();
+        g.Map();
+        g.Submit("""{"kind":"travel","room":{"ref":"room"},"pacingMs":400}""");
+        g.Equal(g.Travels.Count, 0);
+        g.Tick();
+        g.Tick(() => g.State["map"]![0]!["state"] = "Untravelable");
+        for (var frame = 0; frame < 4; frame++)
+            g.Tick();
+
+        g.Is("failed");
+        g.Equal(g.Travels.Count, 0);
+    }),
+    ("travel waits for arrival beyond UI acknowledgment and keeps its attempted room", () =>
+    {
+        var g = new Game();
+        g.Map();
+        g.OnTravel = _ => g.State["ready"] = false;
+        g.Submit("""{"kind":"travel","room":{"ref":"room"}}""");
+        g.Tick();
+        for (var frame = 0; frame < 90; frame++)
+            g.Tick();
+        g.Is("running");
+        g.Equal(g.Travels.Count, 1);
+
+        g.Tick(() => { g.State["screen"] = "NCombatRoom"; g.State["floor"] = 11; g.State["ready"] = true; });
+        g.Is("completed");
+        g.Equal(g.Outcome["attempted"]!["room"]!["ref"]!.GetValue<string>(), "room");
+        g.Equal(g.Outcome["state"]!["floor"]!.GetValue<int>(), 11);
+    }),
+    ("travel with a failed post-activation read remains uncertain without replay", () =>
+    {
+        var g = new Game();
+        g.Map();
+        g.OnTravel = _ => g.Observe = () => throw new Exception("Lost native observation");
+        g.Submit("""{"kind":"travel","room":{"ref":"room"}}""");
+        g.Tick();
+
+        g.Is("unconfirmed");
+        g.Equal(g.Travels.Count, 1);
+        g.Equal(g.Outcome["state"], null);
+        g.Equal(g.Outcome["attempted"]!["room"]!["ref"]!.GetValue<string>(), "room");
+    }),
+    ("explicit shop entry preserves the shopkeeper decision and rejects a changed entrance", () =>
+    {
+        var g = new Game();
+        g.Entrance();
+        g.OnBrowse = _ =>
+        {
+            g.State["screen"] = "NFakeMerchantInventory";
+            g.State["shop"]!["open"] = true;
+        };
+        g.Submit("""{"kind":"openShop"}""");
+        g.Tick();
+        g.Is("completed");
+        g.Equal(g.Browses.Count, 1);
+        g.Equal(g.Outcome["state"]!["screen"]!.GetValue<string>(), "NFakeMerchantInventory");
+
+        g.Entrance();
+        g.Submit("""{"kind":"openShop","pacingMs":400}""");
+        g.Tick();
+        g.Tick(() => g.State["shop"]!["control"] = "different-shop");
+        for (var frame = 0; frame < 4; frame++)
+            g.Tick();
+        g.Is("failed");
+        g.Equal(g.Browses.Count, 1);
+    }),
+    ("automatic shop entry retains an uncertain activation without replay", () =>
+    {
+        var g = new Game();
+        g.Entrance();
+        g.State["player"] = null;
+        g.OnBrowse = _ => throw new Exception("Native shop handler interrupted");
+        g.Submit("""{"kind":"settle"}""");
+        g.Tick();
+
+        g.Is("unconfirmed");
+        g.Equal(g.Browses.Count, 1);
+        g.Equal(g.Outcome["automaticOutcome"]!["attempted"]!["shop"]!.GetValue<string>(), "merchant");
+    }),
+    ("menu return retains applied pops when a later unlock blocks navigation", () =>
+    {
+        var g = new Game();
+        g.Menu("outer");
+        g.OnPop = _ =>
+        {
+            g.State["navigation"]!["menuTop"] = "unlock";
+            g.State["navigation"]!["canReturnToMenu"] = false;
+        };
+        g.Submit("""{"kind":"returnToMenu"}""");
+        g.Tick();
+
+        g.Is("failed");
+        g.Equal(g.Pops.Count, 1);
+        g.Equal(g.Outcome["results"]!.AsArray().Count, 1);
+        g.Equal(g.Outcome["results"]![0]!["attempted"]!["menu"]!.GetValue<string>(), "outer");
+        g.Equal(g.Outcome["state"]!["navigation"]!["menuTop"]!.GetValue<string>(), "unlock");
+    }),
+    ("menu return waits for each ready transition and preserves pending epochs", () =>
+    {
+        var g = new Game();
+        g.Menu("inner");
+        g.OnPop = top =>
+        {
+            g.State["navigation"]!["menuTop"] = top == "inner" ? "timeline" : null;
+            g.State["navigation"]!["atMainMenu"] = top == "timeline";
+            g.State["ready"] = false;
+        };
+        g.Submit("""{"kind":"returnToMenu"}""");
+        g.Tick();
+        g.Is("running");
+        g.Equal(g.Pops.Count, 1);
+        g.Tick(() => g.State["ready"] = true);
+        g.Equal(g.Pops.Count, 2);
+        g.Is("running");
+        g.Tick(() => g.State["ready"] = true);
+
+        g.Is("completed");
+        g.Equal(g.Outcome["results"]!.AsArray().Count, 2);
+        g.Equal(g.Outcome["state"]!["navigation"]!["pendingEpochReveals"]!.GetValue<int>(), 3);
+        g.Equal(g.Clicks.Count, 0);
+    }),
+    ("native menu handler uncertainty retains the attempted pop and stops", () =>
+    {
+        var g = new Game();
+        g.Menu("timeline");
+        g.OnPop = _ => throw new Exception("Native handler interrupted");
+        g.Submit("""{"kind":"returnToMenu"}""");
+        g.Tick();
+        for (var frame = 0; frame < 5; frame++)
+            g.Tick();
+
+        g.Is("unconfirmed");
+        g.Equal(g.Pops.Count, 1);
+        g.Equal(g.Outcome["results"]![0]!["attempted"]!["menu"]!.GetValue<string>(), "timeline");
+    }),
+    ("run setup uses native Standard identity and retains progress on a locked character", () =>
+    {
+        var g = new Game();
+        g.State["combat"] = null;
+        g.State["screen"] = "NSingleplayerSubmenu";
+        g.State["choices"] = JsonNode.Parse("""[{"ref":"custom","label":"Standard","type":"NSubmenuButton","enabled":true},{"ref":"standard","label":"通常","type":"NSubmenuButton","enabled":true,"detail":{"menuAction":"standard"}}]""");
+        g.OnChoose = _ =>
+        {
+            g.State["screen"] = "NCharacterSelectScreen";
+            g.State["choices"] = JsonNode.Parse("""[{"ref":"character","label":"Locked","type":"NCharacterSelectButton","enabled":false,"detail":{"id":"LOCKED"}},{"ref":"confirm","type":"NConfirmButton","enabled":true}]""");
+        };
+        g.Submit("""{"kind":"startRun","character":"LOCKED"}""");
+        g.Tick();
+
+        g.Is("failed");
+        g.Equal(g.Clicks.Single(), "standard");
+        g.Equal(g.Outcome["results"]![0]!["selectedChoice"]!["ref"]!.GetValue<string>(), "standard");
+        g.Equal(g.Outcome["error"]!.GetValue<string>().Contains("locked"), true);
+    }),
     ("Ancient dialogue is an explicit decision by default and autoskip is an operation preference", () =>
     {
         var g = new Game(); g.Rewards(); g.State["screen"] = "NEventRoom";
@@ -414,6 +595,10 @@ sealed class Game
     public List<string> Clicks = [];
     public Action<JsonObject>? OnChoose;
     public Func<JsonObject>? Observe;
+    public Action<string>? OnTravel;
+    public Action<string>? OnBrowse;
+    public Action<string>? OnPop;
+    public List<string> Travels = [], Browses = [], Pops = [];
     public WorkflowService Service;
     public string Operation = "";
     private long _time;
@@ -436,7 +621,9 @@ sealed class Game
                 current["selected"] = true;
             else
                 State["choices"]!.AsArray().Remove(current);
-        }, _ => throw new Exception("Unexpected browse"), () => _time);
+        }, owner => { Browses.Add(owner); OnBrowse!(owner); },
+        room => { Travels.Add(room); OnTravel!(room); },
+        top => { Pops.Add(top); OnPop!(top); }, () => _time);
     }
     public void Submit(string json) => Operation = Service.Start(JsonNode.Parse(json)!.AsObject())["operation"]!.GetValue<string>();
     public void Tick(Action? update = null)
@@ -451,6 +638,30 @@ sealed class Game
         State["ready"] = true;
         update?.Invoke();
     });
+    public void Map()
+    {
+        State["screen"] = "NMapScreen";
+        State["act"] = 1;
+        State["floor"] = 10;
+        State["map"] = JsonNode.Parse("""[{"ref":"room","state":"Travelable"}]""");
+    }
+    public void Entrance()
+    {
+        Rewards();
+        State["screen"] = "NEventRoom";
+        State["shop"] = JsonNode.Parse("""{"control":"merchant","open":false,"canBrowse":true}""");
+        State["player"] = JsonNode.Parse("""{"potions":[{"usable":true,"targets":[{"kind":"shopkeeper"}]}]}""");
+    }
+    public void Menu(string top)
+    {
+        Rewards();
+        State["screen"] = "NTimelineScreen";
+        State["navigation"] = new JsonObject
+        {
+            ["atMainMenu"] = false, ["canReturnToMenu"] = true,
+            ["menuTop"] = top, ["menuDepth"] = 2, ["pendingEpochReveals"] = 3
+        };
+    }
     public void Hand(string id) => State["combat"]!["hand"]![0]!["ref"] = id;
     public void Selection()
     {

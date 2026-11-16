@@ -239,25 +239,7 @@ export class Sts2 {
   }
 
   travel(point, options) {
-    return this.#enqueue(async () => {
-      const state = await this.state();
-      const current = state.map?.find((p) => p.ref === point?.ref && p.state === 'Travelable');
-      if (!current)
-        throw new Error('Pass a currently travelable room from state.map or decision.nextRooms');
-
-      if (!state.ready) throw new Error('The map is not ready for travel');
-
-      await this.#pace();
-      await this.client
-        .object(state.mapControl)
-        .call('OnMapPointSelectedLocally', this.client.object(current.ref));
-      const arrived = await this.waitFor(
-        (s) =>
-          s.ready && s.screen !== 'NMapScreen' && (s.act !== state.act || s.floor !== state.floor),
-        options,
-      );
-      return { status: 'completed', state: arrived };
-    });
+    return this.#enqueue(() => this.#operate('travel', { room: point }, options));
   }
 
   async #operate(kind, params, options) {
@@ -562,22 +544,7 @@ export class Sts2 {
   }
 
   returnToMenu(options) {
-    return this.#enqueue(async () => {
-      const state = await this.state();
-      if (state.navigation?.atMainMenu) return { status: 'completed', state };
-
-      if (!state.navigation?.canReturnToMenu || !state.navigation.menuStack)
-        throw new Error(
-          'Return to menu is unavailable while a run or unlock operation is active; resolve the current decision first',
-        );
-
-      const stack = this.client.object(state.navigation.menuStack);
-      while (await stack.call('Peek')) await stack.call('Pop');
-      return {
-        status: 'completed',
-        state: await this.waitFor((s) => s.ready && s.navigation?.atMainMenu, options),
-      };
-    });
+    return this.#enqueue(() => this.#operate('returnToMenu', {}, options));
   }
 
   finishResults(options) {
@@ -624,43 +591,8 @@ export class Sts2 {
     });
   }
 
-  startRun({ character, timeoutMs = 30_000, ...options } = {}) {
-    return this.#enqueue(async () => {
-      options = { timeoutMs, ...options };
-      let state = await this.state();
-      if (state.player) throw new Error('A run is already in progress');
-
-      const singleplayer = state.choices.find((c) => c.enabled && c.label === 'Singleplayer');
-      if (singleplayer) state = (await this.#choose(singleplayer, options)).state;
-      if (state.screen === 'NSingleplayerSubmenu') {
-        for (const choice of state.choices.filter(
-          (c) => c.enabled && c.type === 'NSubmenuButton',
-        )) {
-          if ((await this.client.object(choice.ref).get('name')) === 'StandardButton') {
-            state = (await this.#choose(choice, options)).state;
-            break;
-          }
-        }
-      }
-      if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
-
-      state = await this.waitFor((s) => s.screen !== 'NCharacterSelectScreen' || s.ready, options);
-      if (state.screen !== 'NCharacterSelectScreen') return { status: 'choice_required', state };
-
-      if (character) {
-        const matches = state.choices.filter(
-          (c) =>
-            c.type === 'NCharacterSelectButton' &&
-            [c.label, c.detail?.id].some((name) => name?.toLowerCase() === character.toLowerCase()),
-        );
-        if (matches.length !== 1 || !matches[0].enabled)
-          throw new Error('Character is missing, locked or ambiguous');
-
-        if (!matches[0].selected) state = (await this.#choose(matches[0], options)).state;
-      }
-      const result = await this.#chooseType('NConfirmButton', options);
-      return { ...result, status: result.state.player ? 'completed' : 'choice_required' };
-    });
+  startRun({ character, ...options } = {}) {
+    return this.#enqueue(() => this.#operate('startRun', { character }, options));
   }
 
   claimGold(options) {
@@ -700,21 +632,7 @@ export class Sts2 {
   }
 
   openShop(options) {
-    return this.#enqueue(async () => {
-      const state = await this.state();
-      if (decisionKind(state) === 'shop') return { status: 'ready', state };
-
-      if (state.shop?.canBrowse && state.shop.control) {
-        await this.#pace();
-        await this.client.object(state.shop.control).call('OpenInventory');
-        return {
-          status: 'completed',
-          state: await this.waitFor((s) => s.ready && decisionKind(s) === 'shop', options),
-        };
-      }
-
-      return this.#chooseType('NMerchantButton', options);
-    });
+    return this.#enqueue(() => this.#operate('openShop', {}, options));
   }
 
   leaveShop(options) {

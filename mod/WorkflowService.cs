@@ -10,6 +10,8 @@ internal sealed class WorkflowService(
     Func<JsonObject, JsonObject> request,
     Action<JsonObject> activate,
     Action<string> browse,
+    Action<string> travel,
+    Action<string> popMenu,
     Func<long> clock)
 {
     // A native activation port can establish rejection before any input is applied.
@@ -38,7 +40,8 @@ internal sealed class WorkflowService(
             throw new InvalidOperationException("A service operation is still running");
 
         var kind = Text(args, "kind");
-        if (kind is not ("playCards" or "selectCards" or "buy" or "claimRewards" or "collectLoot" or "choose" or "settle"))
+        if (kind is not ("playCards" or "selectCards" or "buy" or "claimRewards" or "collectLoot" or "choose" or "settle"
+            or "travel" or "openShop" or "returnToMenu" or "startRun"))
             throw new InvalidOperationException("Unknown service operation");
 
         var pacing = args["pacingMs"]?.Deserialize<double>() ?? 0;
@@ -94,7 +97,9 @@ internal sealed class WorkflowService(
             "selectCards" => Count(args["cards"]) + (Flag(args, "confirm", true) ? 1 : 0),
             "buy" or "claimRewards" => Count(args["items"]),
             "collectLoot" => Choices(Read()).Count(choice => Text(choice, "type") == "NRewardButton") + 1,
-            "choose" => 1,
+            "choose" or "travel" or "openShop" => 1,
+            "startRun" => 4,
+            "returnToMenu" => Read()["navigation"]?["menuDepth"]?.GetValue<int>() ?? 1,
             _ => 0
         };
         return (int)Math.Min(int.MaxValue, 60_000L + steps * (30_000L + _pacingMs));
@@ -126,6 +131,10 @@ internal sealed class WorkflowService(
                 "claimRewards" => await ClaimRewards(List(args["items"])),
                 "collectLoot" => await CollectLoot(args),
                 "choose" => await Choose(args["choice"]),
+                "travel" => await Travel(args["room"]),
+                "openShop" => await OpenShop(),
+                "returnToMenu" => await ReturnToMenu(),
+                "startRun" => await StartRun(args),
                 _ => args["outcome"]?.DeepClone().AsObject() ?? Result("ready", Read())
             };
             outcome = await Settle(outcome);
@@ -239,6 +248,155 @@ internal sealed class WorkflowService(
     private JsonObject Unconfirmed(Exception error) => error is WorkflowFailure flow ? flow.Outcome
         : Result("unconfirmed", SafeRead(), error: "Action outcome is unknown; no action was cancelled or retried: "
             + error.GetBaseException().Message);
+
+    // These UI handlers own input, not a tracked GameAction. An observed arrival
+    // establishes their contract; a lost observation retains the attempted step.
+    private async Task<JsonObject> ActivateAndWait(JsonObject attempt, Action activation,
+        Func<JsonObject, bool> arrived, int budgetMs = 8000)
+    {
+        JsonObject result;
+        try
+        {
+            activation();
+            result = Result("completed", await Wait(s => Flag(s, "ready") && arrived(s), budgetMs));
+        }
+        catch (Exception error) when (error is not ActivationRejected) { result = Unconfirmed(error); }
+        result["attempted"] = attempt.DeepClone();
+        return result;
+    }
+
+    private async Task<JsonObject> Travel(JsonNode? room)
+    {
+        await Pace();
+        var before = Read();
+        var target = Items(before["map"]).SingleOrDefault(p => Text(p, "ref") == Text(room, "ref"));
+        if (!Flag(before, "ready") || Text(before, "screen") != "NMapScreen"
+            || target == null || Text(target, "state") != "Travelable")
+            throw new InvalidOperationException("Pass a currently travelable room from the ready map");
+
+        return await ActivateAndWait(new JsonObject { ["kind"] = "travel", ["room"] = target.DeepClone() },
+            () => travel(Text(target, "ref")), s => Text(s, "screen") != "NMapScreen"
+                && (!JsonNode.DeepEquals(s["act"], before["act"]) || !JsonNode.DeepEquals(s["floor"], before["floor"])), 0);
+    }
+
+    private async Task<JsonObject> OpenShop()
+    {
+        var state = Read();
+        if (Flag(state["shop"], "open") && Text(state, "screen").Contains("MerchantInventory"))
+            return Result("ready", state);
+
+        if (!ShopEntrance(state) || !Flag(state, "ready"))
+            throw new InvalidOperationException("Shop entrance is unavailable");
+
+        if (!Flag(state["shop"], "canBrowse") || Text(state["shop"], "control") == "")
+            return await Choose(OneChoice(state, c => Text(c, "type") == "NMerchantButton"));
+
+        var owner = Text(state["shop"], "control");
+        await Pace();
+        state = Read();
+        if (!ShopEntrance(state) || !Flag(state, "ready") || !Flag(state["shop"], "canBrowse")
+            || Flag(state["shop"], "open") || Text(state["shop"], "control") != owner)
+            throw new ActivationRejected("Shop entrance changed before activation");
+
+        _browsedShop = owner;
+        return await ActivateAndWait(new JsonObject { ["kind"] = "openShop", ["shop"] = owner },
+            () => browse(owner), s => Text(s, "screen").Contains("MerchantInventory"));
+    }
+
+    private async Task<JsonObject> ReturnToMenu()
+    {
+        var results = new JsonArray();
+        try
+        {
+            while (true)
+            {
+                var state = await Wait(s => Flag(s, "ready") || !Flag(s["navigation"], "canReturnToMenu"), 8000);
+                if (Flag(state["navigation"], "atMainMenu"))
+                    return Batch(Result("completed", state), results, []);
+                if (!Flag(state["navigation"], "canReturnToMenu"))
+                    throw new InvalidOperationException("Return to menu is unavailable while a run or unlock operation is active");
+
+                await Pace();
+                state = Read();
+                var top = Text(state["navigation"], "menuTop");
+                if (Flag(state["navigation"], "atMainMenu"))
+                    continue;
+                if (!Flag(state["navigation"], "canReturnToMenu") || top == "")
+                    throw new ActivationRejected("Menu navigation changed before activation");
+
+                var result = await ActivateAndWait(new JsonObject { ["kind"] = "returnToMenu", ["menu"] = top },
+                    () => popMenu(top), s => Flag(s["navigation"], "atMainMenu") || Text(s["navigation"], "menuTop") != top);
+                results.Add(result.DeepClone());
+                if (Text(result, "status") != "completed")
+                    return Batch(result, results, []);
+            }
+        }
+        catch (Exception error) { throw Partial(error, results, []); }
+    }
+
+    private static JsonObject OneChoice(JsonObject state, Func<JsonObject, bool> matches,
+        string error = "No single enabled native choice is available")
+    {
+        var choices = Choices(state).Where(c => Flag(c, "enabled") && matches(c)).ToArray();
+        if (choices.Length != 1)
+            throw new InvalidOperationException(error);
+        return choices[0];
+    }
+
+    private async Task<JsonObject> StartRun(JsonObject args)
+    {
+        var results = new JsonArray();
+        try
+        {
+            var state = Read();
+            if (state["player"] != null)
+                throw new InvalidOperationException("A run is already in progress");
+
+            foreach (var action in new[] { "singleplayer", "standard" })
+            {
+                var choice = Choices(state).SingleOrDefault(c => Flag(c, "enabled") && Text(c["detail"], "menuAction") == action);
+                if (choice == null)
+                    continue;
+                var result = await Choose(choice);
+                results.Add(result.DeepClone());
+                if (Text(result, "status") != "observed_change")
+                    return Batch(result, results, []);
+                state = result["state"]!.AsObject();
+            }
+            if (Text(state, "screen") != "NCharacterSelectScreen")
+                return Batch(Result("choice_required", state), results, []);
+
+            return await StartCharacter(Text(args, "character"), results);
+        }
+        catch (Exception error) { throw Partial(error, results, []); }
+    }
+
+    private async Task<JsonObject> StartCharacter(string character, JsonArray results)
+    {
+        var state = await Wait(s => Text(s, "screen") != "NCharacterSelectScreen" || Flag(s, "ready"), 8000);
+        if (Text(state, "screen") != "NCharacterSelectScreen")
+            return Batch(Result("choice_required", state), results, []);
+
+        if (character != "")
+        {
+            var choice = OneChoice(state, c => Text(c, "type") == "NCharacterSelectButton"
+                && (SameName(Text(c, "label"), character) || SameName(Text(c["detail"], "id"), character)),
+                "Character is missing, locked or ambiguous");
+            if (!Flag(choice, "selected"))
+            {
+                var selected = await Choose(choice);
+                results.Add(selected.DeepClone());
+                if (Text(selected, "status") != "observed_change")
+                    return Batch(selected, results, []);
+                state = selected["state"]!.AsObject();
+            }
+        }
+        var result = await Choose(OneChoice(state, c => Text(c, "type") == "NConfirmButton"));
+        results.Add(result.DeepClone());
+        if (Text(result, "status") == "observed_change")
+            result["status"] = result["state"]?["player"] != null ? "completed" : "choice_required";
+        return Batch(result, results, []);
+    }
 
     private async Task<JsonObject> PlayCards(JsonObject args)
     {
@@ -534,31 +692,20 @@ internal sealed class WorkflowService(
                 foreach (var line in ItemsAsText(state["dialogue"]?["text"]))
                     text.Add(line);
                 outcome["automaticOutcome"] = new JsonObject { ["kind"] = step.Value.Kind, ["status"] = "attempting" };
-                if (step.Value.Choice == null)
+                var next = step.Value.Choice == null ? await OpenShop() : await Choose(step.Value.Choice);
+                if (Text(next, "status") is not ("completed" or "ready" or "observed_change"))
                 {
-                    var owner = Text(state["shop"], "control");
-                    _browsedShop = owner;
-                    await Pace();
-                    browse(owner);
-                    state = await Wait(s => Flag(s, "ready") && Text(s, "screen").Contains("MerchantInventory"), 8000);
+                    next["kind"] = step.Value.Kind;
+                    outcome["automaticOutcome"] = next;
+                    outcome["state"] = Copy(next["state"]) ?? state.DeepClone();
+                    if (next["state"] == null)
+                        outcome["stateScope"] = "last_observed";
+                    outcome["executionStatus"] = executionStatus;
+                    outcome["status"] = Text(next, "status");
+                    outcome["error"] = Copy(next["error"]);
+                    return outcome;
                 }
-                else
-                {
-                    var next = await Choose(step.Value.Choice);
-                    if (Text(next, "status") != "observed_change")
-                    {
-                        next["kind"] = step.Value.Kind;
-                        outcome["automaticOutcome"] = next;
-                        outcome["state"] = Copy(next["state"]) ?? state.DeepClone();
-                        if (next["state"] == null)
-                            outcome["stateScope"] = "last_observed";
-                        outcome["executionStatus"] = executionStatus;
-                        outcome["status"] = Text(next, "status");
-                        outcome["error"] = Copy(next["error"]);
-                        return outcome;
-                    }
-                    state = next["state"]!.DeepClone().AsObject();
-                }
+                state = next["state"]!.DeepClone().AsObject();
                 outcome["automaticSteps"]!.AsArray().Add(step.Value.Kind);
                 outcome.Remove("automaticOutcome");
             }

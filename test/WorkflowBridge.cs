@@ -22,6 +22,8 @@ while (Console.ReadLine() is { } line)
                         args => Call(session, "request", args).AsObject(),
                         choice => Call(session, "activate", choice),
                         owner => Call(session, "browse", JsonValue.Create(owner)),
+                        room => Call(session, "travel", JsonValue.Create(room)),
+                        top => Call(session, "popMenu", JsonValue.Create(top)),
                         () => clock.ElapsedMilliseconds);
                 result = service.Start(command["args"]!.AsObject());
                 break;

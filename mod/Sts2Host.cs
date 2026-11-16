@@ -21,6 +21,7 @@ using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
@@ -85,6 +86,8 @@ public sealed class Sts2Host
             args => JsonNode.Parse(RequestNative(args.ToJsonString()))!.AsObject(),
             ActivateChoice,
             BrowseShop,
+            Travel,
+            PopMenu,
             () => (long)Time.GetTicksMsec());
     }
 
@@ -434,7 +437,7 @@ public sealed class Sts2Host
             RevealedItem = !entity.IsHidden ? entity.Item?.GetType().Name : null
         });
 
-    private object Choice(Control control, bool skipped, bool sphereFinished)
+    private object Choice(Control control, bool skipped, bool sphereFinished, Node scope)
     {
         var type = control.GetType().Name;
         var hitbox = Hitbox(control);
@@ -461,7 +464,8 @@ public sealed class Sts2Host
             && !SaveManager.Instance.HasRunSave && new[] { "_singleplayerButton", "_multiplayerButton", "_compendiumButton" }
                 .Any(field => ReferenceEquals(Get(menu, field), control)))
             blockedReason = "Reveal the obtained Epochs in the Timeline before starting another run";
-        object? detail = null;
+        var menuAction = MenuAction(control, NGame.Instance?.MainMenu, scope);
+        object? detail = menuAction == null ? null : new { MenuAction = menuAction };
         object? activation = null;
         if (control is NCardHolder holder && holder.CardModel is { } card)
         {
@@ -787,7 +791,7 @@ public sealed class Sts2Host
             .Where(c => c is NCardHolder or NMerchantSlot or NCardBundle || !HasChoiceParent(c))
             .Where(c => !(CombatReady && HasParentType(c, "NPlayerHand")))
             .Where(c => scope is not NCardGridSelectionScreen || c is not NCardHolder)
-            .Take(200).Select(c => Choice(c, skippedRewards.Contains(c), sphereFinished)).ToArray();
+            .Take(200).Select(c => Choice(c, skippedRewards.Contains(c), sphereFinished, scope)).ToArray();
         if (scope is NCardGridSelectionScreen gridScreen)
             choices = choices.Concat(GridChoices(gridScreen)).ToArray();
         return (controls, choices);
@@ -831,7 +835,8 @@ public sealed class Sts2Host
             var timelineBusy = timeline != null && Get(timeline, "_inputBlocker") is not Control { Visible: false };
             var isUnlock = timeline?.CurrentUnlockScreen != null && ReferenceEquals(scope, timeline.CurrentUnlockScreen);
             var menu = NGame.Instance?.MainMenu;
-            var canNavigate = player == null && !scope.GetType().Name.Contains("Ftue")
+            var canNavigate = player == null && NGame.Instance?.Transition?.InTransition != true
+                && !scope.GetType().Name.Contains("Ftue")
                 && GodotObject.IsInstanceValid(menu) && Visible(menu!)
                 && (timeline == null || !timelineBusy && inspectEpoch?.Visible != true
                     && !timeline.IsScreenQueued() && timeline.CurrentUnlockScreen == null);
@@ -939,7 +944,10 @@ public sealed class Sts2Host
                     AtMainMenu = canNavigate && menu!.SubmenuStack.Peek() == null,
                     CanReturnToMenu = canNavigate,
                     PendingEpochReveals = SaveManager.Instance.GetDiscoveredEpochCount(),
-                    MenuStack = _bridge.Call("reference", menu.SubmenuStack).AsString()
+                    MenuStack = _bridge.Call("reference", menu.SubmenuStack).AsString(),
+                    MenuTop = menu.SubmenuStack.Peek() is { } top ? _bridge.Call("reference", top).AsString() : null,
+                    MenuDepth = (typeof(NSubmenuStack).GetField("_submenus", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(menu.SubmenuStack) as ICollection)?.Count
                 },
                 Timeline = timeline == null ? null : new
                 {
@@ -1194,12 +1202,58 @@ public sealed class Sts2Host
     private Node ResolveNode(string id) => _bridge.Call("resolve_object", id).AsGodotObject() as Node
         ?? throw new WorkflowService.ActivationRejected("UI reference is stale");
 
+    private static string? MenuAction(object control, object? menu, object? submenu)
+    {
+        if (menu is NMainMenu && ReferenceEquals(Get(menu, "_singleplayerButton"), control))
+            return "singleplayer";
+        if (submenu is NSingleplayerSubmenu && ReferenceEquals(Get(submenu, "_standardButton"), control))
+            return "standard";
+        return null;
+    }
+
+    private static void RequireTravelable(NMapScreen map, NMapPoint point)
+    {
+        var points = Get(map, "_mapPointDictionary") as IDictionary;
+        if (!map.IsOpen || !map.IsTravelEnabled || map.IsTraveling || point.Point == null
+            || point.State.ToString() != "Travelable"
+            || points == null || !points.Values.Cast<object>().Any(p => ReferenceEquals(p, point)))
+            throw new WorkflowService.ActivationRejected("Room is no longer travelable on the current map");
+    }
+
+    private void Travel(string id)
+    {
+        if (Scope() is not NMapScreen map || ResolveNode(id) is not NMapPoint point
+            || JsonNode.Parse(Read())?["ready"]?.GetValue<bool>() != true)
+            throw new WorkflowService.ActivationRejected("Map travel is no longer available");
+        RequireTravelable(map, point);
+        map.OnMapPointSelectedLocally(point);
+    }
+
+    private void PopMenu(string expected)
+    {
+        var state = JsonNode.Parse(Read())!;
+        var menu = NGame.Instance?.MainMenu;
+        if (state["ready"]?.GetValue<bool>() != true || state["navigation"]?["canReturnToMenu"]?.GetValue<bool>() != true
+            || state["navigation"]?["menuTop"]?.GetValue<string>() != expected || menu?.SubmenuStack.Peek() == null)
+            throw new WorkflowService.ActivationRejected("Menu return is no longer safe");
+        menu.SubmenuStack.Pop();
+    }
+
     private void BrowseShop(string id)
     {
-        var owner = ResolveNode(id);
-        var open = owner.GetType().GetMethod("OpenInventory")
-            ?? throw new InvalidOperationException("Native shop inventory handler is unavailable");
-        open.Invoke(owner, null);
+        var state = JsonNode.Parse(Read())!;
+        if (state["ready"]?.GetValue<bool>() != true || state["shop"]?["canBrowse"]?.GetValue<bool>() != true
+            || state["shop"]?["open"]?.GetValue<bool>() == true || state["shop"]?["control"]?.GetValue<string>() != id
+            || state["screen"]?.GetValue<string>() is not ("NMerchantRoom" or "NEventRoom"))
+            throw new WorkflowService.ActivationRejected("Shop entrance is no longer available");
+        switch (ResolveNode(id))
+        {
+            case NMerchantRoom merchant: merchant.OpenInventory(); break;
+            case MegaCrit.Sts2.Core.Nodes.Events.Custom.NFakeMerchant fake:
+                fake.GetType().GetMethod("OpenInventory", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(fake, null);
+                break;
+            default: throw new WorkflowService.ActivationRejected("Native shop inventory handler is unavailable");
+        }
     }
 
     private void ActivateChoice(JsonObject choice)

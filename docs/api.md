@@ -270,6 +270,16 @@ an atomic capture of an earlier frame; an already-sent read can finish after abo
 Default/reset `setSpectatorPacing()` is zero; range 0–5000ms. This connection-local
 `pacingMs` preference does not pause the game or change completion; reads stay available.
 
+## Required capabilities
+
+Ordinary semantic gameplay uses only the registered `Sts2` endpoint; it does not
+require Stagehand's `Object`, `SceneTree`, `Input` or `Script` builtin roots.
+Travel, shop entry, menu return and Standard run setup execute in the mod's shared
+[service operations](operations.md), with server-side validation and recovery receipts.
+`screenshot()` separately requires the optional `Screen` capability. The current
+mod startup still explicitly exposes all builtin roots for generic inspection,
+input and DevTools testing.
+
 ## Advanced inspection and connection details
 
 Card costs are numeric or `"X"`; absent star costs are null. `[Energy]` preserves

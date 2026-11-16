@@ -5,6 +5,94 @@ import { Sts2 as ClientSts2 } from '../client/sts2.mjs';
 import { fixture, uiFixture, button } from './support/fixtures.mjs';
 import { EventEmitter } from 'node:events';
 
+test('gameplay navigation submits semantic operations through a client without Object', async () => {
+  const calls = [];
+  const endpoint = {
+    async invoke(method, args) {
+      calls.push({ method, args });
+      if (method === 'operate')
+        return { operation: args.kind, status: 'accepted', completionTimeoutMs: 180_000 };
+      return {
+        outcome: {
+          operation: args.operation,
+          status: 'completed',
+          state: { screen: 'NMainMenu', ready: true, choices: [], text: [] },
+        },
+      };
+    },
+  };
+  const game = new ClientSts2(new EventEmitter(), endpoint);
+  const waits = [];
+  game.waitFor = async (_predicate, options) => waits.push(options.timeoutMs);
+  game.setSpectatorPacing(400);
+  await game.travel({ ref: 'room' });
+  await game.openShop();
+  await game.returnToMenu();
+  await game.startRun({ character: 'REGENT', timeoutMs: 2000 });
+
+  assert.deepEqual(calls.map((call) => call.method), Array(4).fill(['operate', 'operation']).flat());
+  assert.deepEqual(calls.filter((call) => call.method === 'operate').map((call) => call.args), [
+    { kind: 'travel', room: { ref: 'room' }, pacingMs: 400, autoSkipDialogue: false },
+    { kind: 'openShop', pacingMs: 400, autoSkipDialogue: false },
+    { kind: 'returnToMenu', pacingMs: 400, autoSkipDialogue: false },
+    { kind: 'startRun', character: 'REGENT', pacingMs: 400, autoSkipDialogue: false },
+  ]);
+  assert.deepEqual(waits, [180_000, 180_000, 180_000, 2000]);
+});
+
+test('startRun uses the service completion allowance unless the caller overrides it', async () => {
+  const waits = [];
+  const endpoint = {
+    async invoke(method) {
+      if (method === 'operate')
+        return { operation: 'run', status: 'accepted', completionTimeoutMs: 200_000 };
+      return { outcome: { operation: 'run', status: 'completed' } };
+    },
+  };
+  const game = new ClientSts2(new EventEmitter(), endpoint);
+  game.waitFor = async (_predicate, options) => waits.push(options.timeoutMs);
+  game.setSpectatorPacing(5000);
+
+  await game.startRun();
+  await game.startRun({ character: 'REGENT' });
+  await game.startRun({ character: 'REGENT', timeoutMs: 2000 });
+
+  assert.deepEqual(waits, [200_000, 200_000, 2000]);
+});
+
+test('explicit shop entry uses the shared native service without Object', async () => {
+  let inside = false;
+  const calls = [];
+  const endpoint = {
+    async observe() {
+      return {
+        value: {
+          screen: inside ? 'NFakeMerchantInventory' : 'NEventRoom',
+          ready: true,
+          text: [],
+          choices: [],
+          shop: { control: 'merchant', canBrowse: !inside, open: inside },
+          player: { potions: [{ usable: true, targets: [{ kind: 'shopkeeper' }] }] },
+        },
+      };
+    },
+    async subscribe() { return async () => {}; },
+    async browse(owner) {
+      assert.equal(owner, 'merchant');
+      calls.push(owner);
+      inside = true;
+    },
+  };
+  const game = new Sts2(new EventEmitter(), endpoint);
+  const result = await game.openShop();
+  assert.equal(result.status, 'completed');
+  assert.equal(result.decision.kind, 'shop');
+  assert.equal(result.attempted.kind, 'openShop');
+  assert.deepEqual(calls, ['merchant']);
+  assert.equal((await game.openShop()).status, 'ready');
+  assert.deepEqual(calls, ['merchant']);
+});
+
 test('dialogue autoskip defaults off and follows only its own client session', async () => {
   const requests = [];
   function facade() {
@@ -709,17 +797,12 @@ test('explicit menu navigation does not reveal pending epochs', async () => {
   const client = new EventEmitter(),
     calls = [];
   let inTimeline = true;
-  client.object = (id) => ({
-    async call(method) {
-      assert.equal(id, 'stack');
-      calls.push(method);
-      if (method === 'Peek') return inTimeline ? { id: 'timeline' } : null;
-
-      assert.equal(method, 'Pop');
+  const endpoint = {
+    async popMenu(top) {
+      assert.equal(top, 'timeline');
+      calls.push(top);
       inTimeline = false;
     },
-  });
-  const endpoint = {
     async observe() {
       return {
         value: {
@@ -728,7 +811,7 @@ test('explicit menu navigation does not reveal pending epochs', async () => {
           text: [],
           choices: [],
           timeline: inTimeline ? { busy: false } : null,
-          navigation: { atMainMenu: !inTimeline, canReturnToMenu: true, menuStack: 'stack' },
+          navigation: { atMainMenu: !inTimeline, canReturnToMenu: true, menuTop: inTimeline ? 'timeline' : null, menuDepth: 1 },
         },
       };
     },
@@ -737,7 +820,8 @@ test('explicit menu navigation does not reveal pending epochs', async () => {
     },
   };
   const result = await new Sts2(client, endpoint).returnToMenu();
-  assert.deepEqual(calls, ['Peek', 'Pop', 'Peek']);
+  assert.deepEqual(calls, ['timeline']);
+  assert.equal(result.results.length, 1);
   assert.equal(result.decision.navigation.atMainMenu, true);
 });
 
@@ -841,12 +925,9 @@ test('travel selects a real map point even when its animated widget is absent fr
     mapControl: 'map',
     map: [{ ref: 'room', state: 'Travelable' }],
   };
-  client.object = (id) => ({
-    id,
-    async call(method, target) {
-      assert.equal(id, 'map');
-      assert.equal(method, 'OnMapPointSelectedLocally');
-      assert.equal(target.id, 'room');
+  const endpoint = {
+    async travel(room) {
+      assert.equal(room, 'room');
       state = {
         screen: 'NCombatRoom',
         act: 1,
@@ -858,8 +939,6 @@ test('travel selects a real map point even when its animated widget is absent fr
       };
       for (const notify of listeners) notify();
     },
-  });
-  const endpoint = {
     async observe() {
       return { value: state };
     },
@@ -920,12 +999,12 @@ test('normalization follows game-owned advancement without repeating a vanished 
 });
 
 test('startRun follows the native Standard button after the first run', async () => {
-  const { game, calls } = uiFixture(
+  const { game, calls, endpoint } = uiFixture(
     {
       screen: 'NGame',
       ready: true,
       text: [],
-      choices: [button('singleplayer', 'NMainMenuTextButton', 'Singleplayer')],
+      choices: [button('singleplayer', 'NMainMenuTextButton', 'Solo', { menuAction: 'singleplayer' })],
     },
     (id, update) => {
       if (id === 'singleplayer')
@@ -934,7 +1013,7 @@ test('startRun follows the native Standard button after the first run', async ()
           ready: true,
           text: [],
           choices: [
-            button('standard', 'NSubmenuButton', 'Localized standard title'),
+            button('standard', 'NSubmenuButton', 'Localized standard title', { menuAction: 'standard' }),
             button('custom', 'NSubmenuButton', 'Localized custom title'),
           ],
         });
@@ -964,14 +1043,9 @@ test('startRun follows the native Standard button after the first run', async ()
       }
     },
   );
-  const object = game.client.object;
-  game.client.object = (id) => ({
-    ...object(id),
-    async get(property) {
-      assert.equal(property, 'name');
-      return id === 'standard' ? 'StandardButton' : 'CustomButton';
-    },
-  });
+  const native = game.client.object;
+  endpoint.activate = (choice) => native(choice.ref).call('ForceClick');
+  delete game.client.object;
   const result = await game.startRun({ character: 'IRONCLAD' });
   assert.deepEqual(calls, ['singleplayer', 'standard', 'embark']);
   assert.equal(result.status, 'completed');

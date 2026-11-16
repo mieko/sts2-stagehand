@@ -2,7 +2,7 @@
 
 The mod executes ordered plans, selections, purchases, rewards, native choices
 and forced settlement for every client language. The JS facade adds FIFO, waits,
-presentation, menu/specialized helpers and session-local deck comparisons—not a
+presentation, specialized helpers and session-local deck comparisons—not a
 second batch executor. For gameplay methods, use the [API reference](api.md).
 
 Discover the registered `Sts2` object through Stagehand. `operate` submits work;
@@ -59,6 +59,13 @@ choice stop is not necessarily native-action completion.
 `outcome` retains final `state`, historical `results[i].state` (including nested
 selections), unsubmitted `remaining`, native action IDs, choices, errors and
 `automaticSteps`. Step history becomes available at the stop, not as a live stream.
+Travel/shop/menu activations retain an `attempted` record, including the chosen
+room/shop/menu identity. Menu return and run setup retain ordered `results`, including
+partial progress on failure or an uncertain final activation. Their internal
+navigation steps have no automatically resumable tail; inspect the current position
+before making a new explicit request. Travel waits for actual ready floor/act arrival;
+its completion allowance is a caller wait, not an eight-second UI cancellation timer.
+
 Only the latest receipt is retained: fetch it before submitting another operation.
 Omit the request's `operation` to read that shared latest receipt, which may belong
 to another caller. An expired/unknown ID does not mean its actions failed.
@@ -73,6 +80,10 @@ to another caller. An expired/unknown ID does not mean its actions failed.
 | `claimRewards` | `items`: reward name/current object or list. No implicit card/relic choice. |
 | `collectLoot` | Optional `gold: true`, `potions: false` (boolean/list), `relics: []` (explicit list only), `openCardReward: true`. Claim requested loot, then open ordinary cards without picking; leave special rewards explicit. |
 | `choose` | `choice`: current object, exact label or reference. Activate its native handler and wait for the changed ready position. |
+| `travel` | `room`: a currently travelable map-room object/reference object. Revalidates current map membership and native legality after pacing; waits for ready arrival on a different floor/act. |
+| `openShop` | Enter the current ordinary/Fake Merchant inventory through its native handler. Explicit entry may pass a shopkeeper-potion decision; automatic settlement still stops there. Already open returns `ready`. |
+| `returnToMenu` | Pop the current native menu stack only while no run/tutorial/unlock operation blocks it. Revalidates each pop and waits for ready menu transitions; preserves pending epochs. |
+| `startRun` | Optional `character`: exact visible name or native character ID. Follows native Singleplayer/Standard identity, selects an available character and confirms. Tutorial/FTUE/unlock boundaries remain explicit. |
 | `settle` | Perform [forced presentation](api.md#forced-presentation-versus-decisions). Optional `outcome` preserves prior progress, not authority to act on stale state. |
 
 Common options:
@@ -124,7 +135,7 @@ Service operation IDs differ from native action IDs used by `waitForAction()`.
 | Wait | Default / meaning |
 | --- | --- |
 | Connection/handshake and each RPC | 10 seconds; independent of gameplay. |
-| `completionTimeoutMs` | 60-second settlement margin + (30 seconds + pacing) per planned activation, including selections, confirmation and end-turn. `collectLoot` budgets visible rewards plus opening cards. |
+| `completionTimeoutMs` | 60-second settlement margin + (30 seconds + pacing) per planned activation, including selections, confirmation and end-turn. `collectLoot` budgets visible rewards plus opening cards; `startRun` allows four activations and `returnToMenu` uses the current menu depth. |
 | Single low-level native action | 60 seconds. |
 | Passive `waitFor` / spectator | 30 seconds. |
 | UI confirmation | Eight-second bound. |

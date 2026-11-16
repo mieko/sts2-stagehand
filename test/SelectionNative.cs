@@ -342,3 +342,29 @@ var revealedCell = ProjectCell(false);
 if (revealedCell.Enabled || (string)revealedCell.Detail.GetType().GetProperty("RevealedItem")!.GetValue(revealedCell.Detail)! != "CrystalSphereGold")
     throw new Exception("An uncovered cell is inspection data, not another reveal action");
 Console.WriteLine("Crystal Sphere cells: active→finished eligibility, covered-grid retention and hidden-item guard passed");
+
+// These native menus initialize Godot resources on reflected instance access.
+// Check their adapter bindings without constructing engine-owned screens.
+var nativeFlags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+var standardField = typeof(MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSingleplayerSubmenu)
+    .GetField("_standardButton", nativeFlags);
+var soloField = typeof(MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenu)
+    .GetField("_singleplayerButton", nativeFlags);
+if (standardField?.FieldType != typeof(MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuButton)
+    || soloField?.FieldType != typeof(MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenuTextButton))
+    throw new Exception("Native Singleplayer/Standard identity bindings changed");
+var mapHandler = typeof(MegaCrit.Sts2.Core.Nodes.Screens.Map.NMapScreen)
+    .GetMethod("OnMapPointSelectedLocally", nativeFlags);
+if (mapHandler?.ReturnType != typeof(void)
+    || mapHandler.GetParameters().Single().ParameterType != typeof(MegaCrit.Sts2.Core.Nodes.Screens.Map.NMapPoint))
+    throw new Exception("Native travel handler no longer accepts the current map point");
+var fakeHandler = typeof(MegaCrit.Sts2.Core.Nodes.Events.Custom.NFakeMerchant)
+    .GetMethod("OpenInventory", nativeFlags);
+if (fakeHandler?.IsPrivate != true || fakeHandler.GetParameters().Length != 0)
+    throw new Exception("Fake Merchant's private native inventory handler changed");
+var submenuStack = typeof(MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuStack);
+if (submenuStack.GetMethod("Pop", nativeFlags)?.ReturnType != typeof(void)
+    || submenuStack.GetField("_submenus", nativeFlags)?.FieldType
+        != typeof(Stack<MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenu>))
+    throw new Exception("Native menu navigation/depth bindings changed");
+Console.WriteLine("Native navigation bindings: owned Standard/Singleplayer, typed map handler, private Fake Merchant handler and menu stack verified");
