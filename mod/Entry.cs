@@ -28,8 +28,14 @@ public static class Entry
             bridge = script.New().As<Node>();
             bridge.Name = "Stagehand";
             tree.Root.AddChild(bridge);
-            bridge.Call("enable_builtins");
-            var error = (Error)bridge.Call("start", token, 0).AsInt32();
+            var error = (Error)bridge.Call("enable_builtins", new string[]
+            {
+                "Runtime", "SceneTree", "Object", "Screen", "Input", "Script"
+            }).AsInt32();
+            if (error != Error.Ok)
+                throw new InvalidOperationException($"Stagehand builtins: {error}");
+
+            error = (Error)bridge.Call("start", token, 0).AsInt32();
             if (error != Error.Ok)
                 throw new InvalidOperationException($"Stagehand start: {error}");
 

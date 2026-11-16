@@ -156,7 +156,8 @@ no hidden RNG, future rewards or shuffled draw order are exposed.
 
 The mod registers one `Sts2` object on the generic Stagehand bridge. Native game
 knowledge stays here; Stagehand supplies discovery, transport, subscriptions,
-screenshots and input.
+screenshots and input. This mod also explicitly enables Stagehand's `Script` root
+for runtime GDScript evaluation and conditional input through `game.client`.
 
 | File | Responsibility |
 | --- | --- |
