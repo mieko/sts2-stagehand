@@ -332,3 +332,9 @@ if (menu) console.log(await menu.get('visible'));
 
 See Stagehand's [wrapper factories](../stagehand/client/README.md#wrapper-factories)
 to add client helpers while retaining the standard methods.
+
+For bounded in-engine readings, use
+`await game.client.builtin('PropertyRecorder')`. It is explicitly enabled alongside
+the other developer tools, including `Script` for scripted tracks. Recording is
+explicit; semantic gameplay does not start it. See Stagehand's
+[recording guide](../stagehand/docs/recording.md) for sampling, retrieval and lifecycle.

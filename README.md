@@ -141,6 +141,9 @@ npm run test:selection -- -p:GameDataDir="$GAME_DATA_DIR"
 For another host build, add `-p:HostBuildDir=/absolute/path/to/output`. This checks
 eligible cards, detached previews/model preservation, numeric context, costs,
 facing and ending phases using game-type shells: no native nodes, engine or saves.
+The selected game's `Sentry.Godot.dll` and `Sentry.dll` are also required by its
+managed module initializer. Its engine-extension-not-loaded notice is expected
+in this game-free test process.
 It does not replace live qualification. Coordinate live tests in an isolated
 app/profile; keep game assemblies and outputs ignored.
 
@@ -152,12 +155,22 @@ are outside this API. Private game UI fields may require adapter updates after a
 game release. Unsupported screens have explicit `game.client` input/inspection;
 no hidden RNG, future rewards or shuffled draw order are exposed.
 
+Steam build 26655341 / v0.111.1 (`cc1f9462`) / MegaDot 4.5.1-m.14 was separately
+qualified on macOS arm64 for managed build, native model/selection fixtures,
+isolated profile migration, native mod loading, main-menu decisions, persistent
+client reuse and PropertyRecorder capture/retrieval. First-battle combat, ordered
+plays, turn completion, ordinary rewards and return to map also passed live
+qualification. Later combat, results and unlock transitions have not been
+live-qualified on this update. Native GC/finalizer
+stalls and the previously observed invalid-free exit remain unresolved.
+
 ## How the integration fits together
 
 The mod registers one `Sts2` object on the generic Stagehand bridge. Native game
 knowledge stays here; Stagehand supplies discovery, transport, subscriptions,
-screenshots and input. This mod also explicitly enables Stagehand's `Script` root
-for runtime GDScript evaluation and conditional input through `game.client`.
+screenshots and input. This mod explicitly enables all developer-tool builtins,
+including `Script` for runtime GDScript evaluation and conditional input, and
+`PropertyRecorder` for bounded in-engine recordings through `game.client`.
 
 | File | Responsibility |
 | --- | --- |

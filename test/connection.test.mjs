@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const { WebSocket, WebSocketServer } = require('ws');
 const { connect } = await import(require.resolve('godot-stagehand'));
 
-async function wrapperServer(t, { kind = 'Sts2', missing = false } = {}) {
+async function wrapperServer(t, { kind = 'Sts2', missing = false, recorder = false } = {}) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   t.after(async () => {
     for (const socket of server.clients) socket.terminate();
@@ -16,6 +16,7 @@ async function wrapperServer(t, { kind = 'Sts2', missing = false } = {}) {
   const objects = [
     ...(missing ? [] : [{ id: 'sts', label: 'Sts2', kind }]),
     { id: 'other', label: 'Other', kind: 'Other' },
+    ...(recorder ? [{ id: 'recorder', label: 'PropertyRecorder', kind: 'PropertyRecorder', version: '1.0.0' }] : []),
   ];
   server.on('connection', (socket) =>
     socket.on('message', (bytes) => {
@@ -56,6 +57,22 @@ test('StS connection uses the core wrapper factory and keeps one stateful facade
   t.after(() => independent.close());
   assert.notEqual(independent, game);
   assert.equal(await independent.client.findObject('Sts2'), independent);
+});
+
+test('StS connection retains the core PropertyRecorder wrapper alongside semantic and custom wrappers', async (t) => {
+  const game = await connectSts2(await wrapperServer(t, { recorder: true }), {
+    token: 'test',
+    WebSocket,
+    wrappers: { Other: (remote) => ({ remote, custom: true }) },
+  });
+  t.after(() => game.close());
+  const recorder = await game.client.builtin('PropertyRecorder');
+  assert.equal(recorder.remote.client, game.client);
+  assert.equal((await game.client.findObject('Other')).custom, true);
+  assert.equal(await game.client.findObject('Sts2'), game);
+  assert.deepEqual(await recorder.read({ offset: 2 }), {
+    object: 'recorder', method: 'read', params: { offset: 2 },
+  });
 });
 
 test('StS factory supports an existing client without replacing its wrappers or closing it on discovery failure', async (t) => {

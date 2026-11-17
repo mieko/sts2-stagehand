@@ -11,5 +11,7 @@
     <Reference Include="RuntimeControl"><HintPath>$(HostBuildDir)/RuntimeControl.dll</HintPath></Reference>
     <Reference Include="GodotSharp"><HintPath>$(GameDataDir)/GodotSharp.dll</HintPath></Reference>
     <Reference Include="sts2"><HintPath>$(GameDataDir)/sts2.dll</HintPath></Reference>
+    <Reference Include="Sentry.Godot"><HintPath>$(GameDataDir)/Sentry.Godot.dll</HintPath></Reference>
+    <Reference Include="Sentry"><HintPath>$(GameDataDir)/Sentry.dll</HintPath></Reference>
   </ItemGroup>
 </Project>

@@ -1067,7 +1067,7 @@ public sealed class Sts2Host
                         Description = Text(p.DynamicDescription),
                         Target = p.TargetType.ToString(),
                         Targets = PotionTargets(p),
-                        Usable = !p.IsQueued && p.PassesCustomUsabilityCheck && p.Usage != PotionUsage.Automatic
+                        Usable = player.CanUseOrRemovePotions && !p.IsQueued && p.PassesCustomUsabilityCheck && p.Usage != PotionUsage.Automatic
                             && (p.Usage != PotionUsage.CombatOnly || CombatReady),
                         Effects = Effects(p.ExtraHoverTips),
                         Mechanics = Mechanics(p)
@@ -1375,7 +1375,7 @@ public sealed class Sts2Host
                     ?? throw new InvalidOperationException("Potion reference is stale");
                 if (kind == "discardPotion")
                 {
-                    if (!player.CanRemovePotions || potion.IsQueued)
+                    if (!player.CanUseOrRemovePotions || potion.IsQueued)
                         throw new InvalidOperationException("Potion cannot be discarded now");
 
                     pending.Potion = potion;
@@ -1387,7 +1387,7 @@ public sealed class Sts2Host
                         Status = "accepted"
                     });
                 }
-                if (potion.IsQueued || !potion.PassesCustomUsabilityCheck || potion.Usage == PotionUsage.Automatic)
+                if (!player.CanUseOrRemovePotions || potion.IsQueued || !potion.PassesCustomUsabilityCheck || potion.Usage == PotionUsage.Automatic)
                     throw new InvalidOperationException("Potion cannot be used now");
 
                 if (potion.Usage == PotionUsage.CombatOnly && !CombatReady)

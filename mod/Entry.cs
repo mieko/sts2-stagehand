@@ -30,7 +30,7 @@ public static class Entry
             tree.Root.AddChild(bridge);
             var error = (Error)bridge.Call("enable_builtins", new string[]
             {
-                "Runtime", "SceneTree", "Object", "Screen", "Input", "Script"
+                "Runtime", "SceneTree", "Object", "Screen", "Input", "Script", "PropertyRecorder"
             }).AsInt32();
             if (error != Error.Ok)
                 throw new InvalidOperationException($"Stagehand builtins: {error}");
