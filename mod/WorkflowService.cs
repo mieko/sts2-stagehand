@@ -235,13 +235,15 @@ internal sealed class WorkflowService(
         // Revalidate after pacing; it is never safe to activate a recycled UI reference.
         var current = CurrentChoice(Read(), choice);
         var confirmsParent = parent != "" && Text(current, "type") == "NConfirmButton";
+        var opensSummary = Text(before["result"], "phase") == "outcome"
+            && Text(current, "type") == "NGameOverContinueButton";
 
         JsonObject result;
         try
         {
             activate(current);
             var state = await Wait(s => Flag(s, "ready") && Fingerprint(s) != prior
-                || SelectionResumed(s, parent), 8000);
+                || SelectionResumed(s, parent) || opensSummary && ResultAnimating(s), 8000);
             if (SelectionResumed(state, parent)
                 || confirmsParent && Text(state["pending"], "action") == parent)
             {
@@ -253,7 +255,13 @@ internal sealed class WorkflowService(
                     result["status"] = "observed_change";
             }
             else
+            {
+                // Native summary animation acknowledges Continue before score unlocks
+                // and discoveries finish. Their next enabled decision owns completion.
+                if (ResultAnimating(state))
+                    state = await Wait(s => Flag(s, "ready") && !ResultAnimating(s));
                 result = Result("observed_change", state);
+            }
         }
         catch (Exception error) when (error is not ActivationRejected) { result = Unconfirmed(error); }
         result["selectedChoice"] = choice.DeepClone();
@@ -675,7 +683,7 @@ internal sealed class WorkflowService(
                 // Outcome snapshots retain provenance, never authority to advance stale UI.
                 state = Read();
                 if (!Flag(state, "ready"))
-                    state = await Wait(s => Flag(s, "ready"), 8000);
+                    state = await Wait(s => Flag(s, "ready"), ResultAnimating(state) ? 0 : 8000);
                 outcome["state"] = state.DeepClone();
                 outcome["outcomeText"] = new JsonArray(text.Select(s => JsonValue.Create(s)).ToArray());
                 if (ShopEntrance(state) && Flag(state["shop"], "open"))
@@ -884,6 +892,8 @@ internal sealed class WorkflowService(
     private static bool SelectionResumed(JsonObject state, string parent) => parent != ""
         && !CardSelection(state) && Text(state["pending"], "action") == parent
         && Text(state["pending"], "status") is "running" or "completed" or "failed" or "cancelled";
+    private static bool ResultAnimating(JsonObject state) => Text(state, "screen") == "NGameOverScreen"
+        && Text(state["result"], "phase") == "summary_animation";
     private static bool ShopEntrance(JsonObject state) =>
         Text(state, "screen") is "NMerchantRoom" or "NEventRoom" && state["shop"] != null;
     private static bool SameName(string name, string? wanted) =>

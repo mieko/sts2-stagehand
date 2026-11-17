@@ -118,6 +118,12 @@ wait rather than the eight-second UI acknowledgment bound.
 A confirmation that immediately reaches another selection returns `choice_required`
 with the same parent action, even without an observable intermediate running frame.
 
+The native result screen entering `summary_animation` acknowledges Continue before
+its score unlocks and discoveries finish. The service then waits for the actual
+next ready decision, including when settlement first observes an ongoing summary;
+the eight-second UI acknowledgment bound does not limit that native animation.
+Historical completed combat actions do not acknowledge a new result input.
+
 Forced settlement follows native completion/enabled controls, never a button label
 alone. It does not choose optional cards/relics, acknowledge tutorials or reveal
 epochs. Settlement failure cannot undo an action or make it safe to replay.

@@ -185,6 +185,115 @@ var cases = new (string Name, Action Test)[]
         g.Equal(g.Outcome["results"]![0]!["selectedChoice"]!["ref"]!.GetValue<string>(), "standard");
         g.Equal(g.Outcome["error"]!.GetValue<string>().Contains("locked"), true);
     }),
+    ("ending Continue acknowledges the native summary before its next enabled decision", () =>
+    {
+        var g = new Game();
+        g.Ending();
+        g.OnChoose = choice =>
+        {
+            choice["enabled"] = false;
+            g.State["ready"] = false;
+            g.State["result"]!["phase"] = "summary_animation";
+        };
+
+        g.Submit("""{"kind":"choose","choice":{"ref":"continue"}}""");
+        g.Tick();
+        for (var frame = 0; frame < 90; frame++)
+            g.Tick();
+
+        g.Is("running");
+        g.Equal(g.Clicks.Single(), "continue");
+        g.Equal(g.Requests.Count, 0);
+
+        g.Tick(() =>
+        {
+            g.State["result"]!["earnedEpochCount"] = 2;
+            g.State["result"]!["pendingEpochReveals"] = 2;
+            g.State["result"]!["scoreUnlocksRemaining"] = 10;
+        });
+        g.Is("running");
+
+        g.Tick(() =>
+        {
+            g.State["ready"] = true;
+            g.State["result"]!["phase"] = "earned_epochs";
+            g.State["choices"] = JsonNode.Parse("""[{"ref":"unlock","type":"NReturnToMainMenuButton","enabled":true,"label":"Entsperren"}]""");
+        });
+
+        g.Is("observed_change");
+        g.Equal(g.Clicks.Count, 1);
+        g.Equal(g.Outcome["selectedChoice"]!["ref"]!.GetValue<string>(), "continue");
+        g.Equal(g.Outcome["selectedChoice"]!["enabled"]!.GetValue<bool>(), true);
+        g.Equal(g.Outcome["state"]!["screen"]!.GetValue<string>(), "NGameOverScreen");
+        g.Equal(g.Outcome["state"]!["result"]!["win"]!.GetValue<bool>(), true);
+        g.Equal(g.Outcome["state"]!["result"]!["score"]!.GetValue<int>(), 1545);
+        g.Equal(g.Outcome["state"]!["result"]!["stats"]!["floorsClimbed"]!.GetValue<int>(), 48);
+        g.Equal(g.Outcome["state"]!["result"]!["stats"]!["bossesSlain"]!.GetValue<int>(), 3);
+        g.Equal(g.Outcome["state"]!["result"]!["stats"]!["elitesKilled"]!.GetValue<int>(), 3);
+        g.Equal(g.Outcome["state"]!["result"]!["earnedEpochCount"]!.GetValue<int>(), 2);
+        g.Equal(g.Outcome["state"]!["result"]!["pendingEpochReveals"]!.GetValue<int>(), 2);
+        g.Equal(g.Outcome["state"]!["result"]!["scoreUnlocksRemaining"]!.GetValue<int>(), 10);
+        g.Equal(g.Outcome["state"]!["pending"]!["action"]!.GetValue<string>(), "historical-turn");
+    }),
+    ("settlement observes an already running native summary beyond the UI budget", () =>
+    {
+        var g = new Game();
+        g.Ending();
+        g.State["ready"] = false;
+        g.State["choices"]![0]!["enabled"] = false;
+        g.State["result"]!["phase"] = "summary_animation";
+        g.Submit("""{"kind":"settle"}""");
+        g.Tick();
+        for (var frame = 0; frame < 90; frame++)
+            g.Tick();
+
+        g.Is("running");
+        g.Tick(() =>
+        {
+            g.State["ready"] = true;
+            g.State["result"]!["phase"] = "earned_epochs";
+            g.State["choices"] = JsonNode.Parse("""[{"ref":"unlock","type":"NReturnToMainMenuButton","enabled":true}]""");
+        });
+
+        g.Is("ready");
+        g.Equal(g.Clicks.Count, 0);
+    }),
+    ("same-screen ready choices acknowledge enabled controls and native result facts", () =>
+    {
+        foreach (var changed in new[] { "enabled", "result" })
+        {
+            var g = new Game();
+            g.Ending();
+            g.OnChoose = choice =>
+            {
+                if (changed == "enabled")
+                    choice["enabled"] = false;
+                else
+                    g.State["result"]!["earnedEpochCount"] = 2;
+            };
+            g.Submit("""{"kind":"choose","choice":{"ref":"continue"}}""");
+            g.Tick();
+
+            g.Is("observed_change");
+            g.Equal(g.Clicks.Single(), "continue");
+        }
+    }),
+    ("unchanged ending input is unconfirmed despite a historical completed combat action", () =>
+    {
+        var g = new Game();
+        g.Ending();
+        g.OnChoose = _ => { };
+        g.Submit("""{"kind":"choose","choice":{"ref":"continue"}}""");
+        g.Tick();
+        for (var frame = 0; frame < 90; frame++)
+            g.Tick();
+
+        g.Is("unconfirmed");
+        g.Equal(g.Clicks.Single(), "continue");
+        g.Equal(g.Requests.Count, 0);
+        g.Equal(g.Outcome["selectedChoice"]!["ref"]!.GetValue<string>(), "continue");
+        g.Equal(g.Outcome["state"]!["pending"]!["status"]!.GetValue<string>(), "completed");
+    }),
     ("retention confirmation waits for the same resumed turn beyond the UI acknowledgment budget", () =>
     {
         var g = new Game();
@@ -796,6 +905,28 @@ sealed class Game
             ["atMainMenu"] = false, ["canReturnToMenu"] = true,
             ["menuTop"] = top, ["menuDepth"] = 2, ["pendingEpochReveals"] = 3
         };
+    }
+    public void Ending()
+    {
+        State["screen"] = "NGameOverScreen";
+        State["combat"] = null;
+        State["result"] = JsonNode.Parse("""
+            {
+                "win": true,
+                "score": 1545,
+                "stats": {"floorsClimbed":48,"bossesSlain":3,"elitesKilled":3},
+                "phase": "outcome",
+                "earnedEpochCount": 1,
+                "pendingEpochReveals": 1,
+                "scoreUnlocksRemaining": 11
+            }
+            """);
+        State["pending"] = JsonNode.Parse("""
+            {"action":"historical-turn","kind":"endTurn","status":"completed","error":null}
+            """);
+        State["choices"] = JsonNode.Parse("""
+            [{"ref":"continue","type":"NGameOverContinueButton","enabled":true,"label":"Fortfahren"}]
+            """);
     }
     public void Hand(string id) => State["combat"]!["hand"]![0]!["ref"] = id;
     public void Selection()
