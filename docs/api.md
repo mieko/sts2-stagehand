@@ -320,3 +320,15 @@ not the game or accepted work. Adopt matching DLL/PCK/client together; old gener
 `game` registration is not an StS2 wrapper. Changed imports require a fresh module
 graph/kernel, not just a new socket. See [README](../README.md) for deployment,
 isolation and compatibility limits.
+
+Use Stagehand's named builtin methods for generic inspection and input. Native
+nodes retain reflection methods such as `get()` and `call()`:
+
+```js
+var tree = await game.client.builtin('SceneTree');
+var menu = (await tree.query({name: 'MainMenu'})).nodes[0]?.node;
+if (menu) console.log(await menu.get('visible'));
+```
+
+See Stagehand's [wrapper factories](../stagehand/client/README.md#wrapper-factories)
+to add client helpers while retaining the standard methods.

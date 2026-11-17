@@ -9,11 +9,10 @@ try {
   const tree = await game.builtin('SceneTree');
   const input = await game.builtin('Input');
   const screen = await game.builtin('Screen');
-  const { root } = await tree.invoke('current');
-  const menu = (await tree.invoke('query', { name: 'MainMenu' })).nodes[0].node;
-  const settings = (await tree.invoke('query', { root: menu, name: 'SettingsScreen' })).nodes[0]
-    .node;
-  const button = (await tree.invoke('query', { root: menu, name: 'SettingsButton' })).nodes[0].node;
+  const { root } = await tree.current();
+  const menu = (await tree.query({ name: 'MainMenu' })).nodes[0].node;
+  const settings = (await tree.query({ root: menu, name: 'SettingsScreen' })).nodes[0].node;
+  const button = (await tree.query({ root: menu, name: 'SettingsButton' })).nodes[0].node;
   assert.equal(await settings.get('visible'), false, 'Start at the main menu');
 
   async function click(control) {
@@ -29,8 +28,8 @@ try {
     const result = await input.moveMouseTo({ position, duration_ms: 250 });
     assert.equal(result.status, 'completed');
     assert.ok(result.position.args.every((value, i) => Math.abs(value - position.args[i]) < 0.001));
-    await input.invoke('press', { button: 'left', position });
-    await input.invoke('release', { button: 'left' });
+    await input.press({ button: 'left', position });
+    await input.release({ button: 'left' });
     return result;
   }
 
@@ -58,7 +57,7 @@ try {
   const image = await screen.capture();
   if (process.env.STAGEHAND_CAPTURE_PATH)
     await writeFile(process.env.STAGEHAND_CAPTURE_PATH, image.image);
-  const back = (await tree.invoke('query', { root: settings, name: 'BackButton' })).nodes[0].node;
+  const back = (await tree.query({ root: settings, name: 'BackButton' })).nodes[0].node;
   const closed = await transition(back, false);
   await new Promise((resolve) => setTimeout(resolve, 400));
   const state = (await input.observe()).value;
