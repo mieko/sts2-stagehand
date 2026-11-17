@@ -86,7 +86,7 @@ export async function connectSts2(url, options = {}) {
 export class Sts2 {
   #tail = Promise.resolve();
   #queueError;
-  #spectatorDelayMs = 0;
+  #humanDelayMs = 0;
   #autoSkipDialogue = false;
   #deckBeforeCombat;
   #spectatorLast;
@@ -157,11 +157,11 @@ export class Sts2 {
   async brief(options) {
     return present(await this.decision(options));
   }
-  setSpectatorPacing(milliseconds = 0) {
-    if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds > 5000)
-      throw new RangeError('Spectator pacing must be in 0..5000 milliseconds');
+  setHumanDelay(milliseconds = 0) {
+    if (!Number.isInteger(milliseconds) || milliseconds < 0 || milliseconds > 5000)
+      throw new RangeError('Human delay must be an integer in 0..5000 milliseconds');
 
-    this.#spectatorDelayMs = milliseconds;
+    this.#humanDelayMs = milliseconds;
   }
   setDialogueAutoskip(enabled = false) {
     if (typeof enabled !== 'boolean') throw new TypeError('Dialogue autoskip must be boolean');
@@ -169,7 +169,7 @@ export class Sts2 {
     this.#autoSkipDialogue = enabled;
   }
   async #pace() {
-    if (this.#spectatorDelayMs) await pause(this.#spectatorDelayMs);
+    if (this.#humanDelayMs) await pause(this.#humanDelayMs);
   }
 
   #enqueue(work, { trackDeck = false } = {}) {
@@ -249,7 +249,7 @@ export class Sts2 {
     const accepted = await this.endpoint.invoke('operate', {
       kind,
       ...params,
-      pacingMs: this.#spectatorDelayMs,
+      humanDelayMs: this.#humanDelayMs,
       autoSkipDialogue: this.#autoSkipDialogue,
     });
     this.#lastOperation = accepted.operation;

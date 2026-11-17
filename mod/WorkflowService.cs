@@ -19,7 +19,7 @@ internal sealed class WorkflowService(
     private JsonObject? _receipt;
     private TaskCompletionSource? _frame;
     private string? _browsedShop;
-    private int _pacingMs;
+    private int _humanDelayMs;
     private bool _autoSkipDialogue;
 
     public bool Busy
@@ -44,11 +44,11 @@ internal sealed class WorkflowService(
             or "travel" or "openShop" or "returnToMenu" or "startRun"))
             throw new InvalidOperationException("Unknown service operation");
 
-        var pacing = args["pacingMs"]?.Deserialize<double>() ?? 0;
+        var pacing = args["humanDelayMs"]?.Deserialize<double>() ?? 0;
         if (!double.IsFinite(pacing) || pacing != Math.Floor(pacing) || pacing is < 0 or > 5000)
-            throw new ArgumentException("pacingMs must be in 0..5000");
+            throw new ArgumentException("humanDelayMs must be in 0..5000");
 
-        _pacingMs = (int)pacing;
+        _humanDelayMs = (int)pacing;
         _autoSkipDialogue = Flag(args, "autoSkipDialogue");
 
         var receipt = new JsonObject
@@ -102,7 +102,7 @@ internal sealed class WorkflowService(
             "returnToMenu" => Read()["navigation"]?["menuDepth"]?.GetValue<int>() ?? 1,
             _ => 0
         };
-        return (int)Math.Min(int.MaxValue, 60_000L + steps * (30_000L + _pacingMs));
+        return (int)Math.Min(int.MaxValue, 60_000L + steps * (30_000L + _humanDelayMs));
     }
 
     // Called on Godot's main thread. All native work resumes on that same thread.
@@ -170,7 +170,7 @@ internal sealed class WorkflowService(
 
     private async Task Pace()
     {
-        var until = clock() + _pacingMs;
+        var until = clock() + _humanDelayMs;
         while (clock() < until)
             await NextFrame();
     }

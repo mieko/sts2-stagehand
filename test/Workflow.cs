@@ -33,7 +33,7 @@ var cases = new (string Name, Action Test)[]
     {
         var g = new Game();
         g.Map();
-        g.Submit("""{"kind":"travel","room":{"ref":"room"},"pacingMs":400}""");
+        g.Submit("""{"kind":"travel","room":{"ref":"room"},"humanDelayMs":400}""");
         g.Equal(g.Travels.Count, 0);
         g.Tick();
         g.Tick(() => g.State["map"]![0]!["state"] = "Untravelable");
@@ -89,7 +89,7 @@ var cases = new (string Name, Action Test)[]
         g.Equal(g.Outcome["state"]!["screen"]!.GetValue<string>(), "NFakeMerchantInventory");
 
         g.Entrance();
-        g.Submit("""{"kind":"openShop","pacingMs":400}""");
+        g.Submit("""{"kind":"openShop","humanDelayMs":400}""");
         g.Tick();
         g.Tick(() => g.State["shop"]!["control"] = "different-shop");
         for (var frame = 0; frame < 4; frame++)
@@ -575,13 +575,13 @@ var cases = new (string Name, Action Test)[]
     ("Godot JSON float-form integral pacing is accepted without weakening validation", () =>
     {
         var g = new Game();
-        g.Submit("""{"kind":"playCards","plays":[],"pacingMs":0.0}""");
+        g.Submit("""{"kind":"playCards","plays":[],"humanDelayMs":0.0}""");
         g.Tick(); g.Is("completed");
     }),
     ("the service supplies a completion allowance scaled by steps and pacing", () =>
     {
         var g = new Game();
-        var args = JsonNode.Parse("""{"kind":"playCards","plays":[{"card":"Strike","select":["Defend","Defend"]},"Strike"],"endTurn":true,"pacingMs":400}""")!.AsObject();
+        var args = JsonNode.Parse("""{"kind":"playCards","plays":[{"card":"Strike","select":["Defend","Defend"]},"Strike"],"endTurn":true,"humanDelayMs":400}""")!.AsObject();
         var accepted = g.Service.Start(args);
         // Two plays, two selections, confirmation and endTurn, plus settlement margin.
         g.Equal(accepted["completionTimeoutMs"]!.GetValue<int>(), 60_000 + 6 * 30_400);
@@ -797,7 +797,7 @@ var cases = new (string Name, Action Test)[]
     {
         var g = new Game(); g.Rewards(); g.State["screen"] = "NTreasureRoom";
         g.State["choices"] = JsonNode.Parse("""[{"ref":"leave","type":"NProceedButton","enabled":true,"isSkip":false}]""");
-        g.Submit("""{"kind":"settle","pacingMs":400}"""); g.Tick();
+        g.Submit("""{"kind":"settle","humanDelayMs":400}"""); g.Tick();
         g.Tick(() => { g.State["screen"] = "NMapScreen"; g.State["choices"] = new JsonArray(); });
         for (var i = 0; i < 4; i++) g.Tick();
         g.Is("ready"); g.Equal(g.Clicks.Count, 0);

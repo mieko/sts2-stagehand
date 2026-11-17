@@ -268,9 +268,11 @@ has ended. Coalescing can miss fast positions; no-op/indistinguishable changes n
 not yield frames. No replay/reconnect is automatic. A later passive read is not
 an atomic capture of an earlier frame; an already-sent read can finish after abort.
 
-`setSpectatorPacing(400)` adds 400ms before each activation, including confirmation.
-Default/reset `setSpectatorPacing()` is zero; range 0–5000ms. This connection-local
-`pacingMs` preference does not pause the game or change completion; reads stay available.
+## Human delay
+
+`setHumanDelay(400)` adds 400ms before each activation, including confirmation.
+Default/reset `setHumanDelay()` is zero; range 0–5000 whole milliseconds. This connection-local
+`humanDelayMs` preference does not pause the game or change completion; reads stay available.
 
 ## Required capabilities
 

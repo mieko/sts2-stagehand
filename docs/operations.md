@@ -90,7 +90,7 @@ Common options:
 
 - `autoSkipDialogue: false`: `true` advances nonbranching Ancient speech to actual
   offers. Resets per request; does not affect other callers or other forced settlement.
-- `pacingMs: 0`: integer 0–5000, wall-time dwell before each native activation.
+- `humanDelayMs: 0`: integer 0–5000, wall-time dwell before each native activation.
 
 Names follow the [API identity rules](api.md#observe-and-identify). The host
 validates identity, eligibility, targets, readiness and payment. Unsupported native

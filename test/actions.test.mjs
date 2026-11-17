@@ -24,7 +24,7 @@ test('gameplay navigation submits semantic operations through a client without O
   const game = new ClientSts2(new EventEmitter(), endpoint);
   const waits = [];
   game.waitFor = async (_predicate, options) => waits.push(options.timeoutMs);
-  game.setSpectatorPacing(400);
+  game.setHumanDelay(400);
   await game.travel({ ref: 'room' });
   await game.openShop();
   await game.returnToMenu();
@@ -32,10 +32,10 @@ test('gameplay navigation submits semantic operations through a client without O
 
   assert.deepEqual(calls.map((call) => call.method), Array(4).fill(['operate', 'operation']).flat());
   assert.deepEqual(calls.filter((call) => call.method === 'operate').map((call) => call.args), [
-    { kind: 'travel', room: { ref: 'room' }, pacingMs: 400, autoSkipDialogue: false },
-    { kind: 'openShop', pacingMs: 400, autoSkipDialogue: false },
-    { kind: 'returnToMenu', pacingMs: 400, autoSkipDialogue: false },
-    { kind: 'startRun', character: 'REGENT', pacingMs: 400, autoSkipDialogue: false },
+    { kind: 'travel', room: { ref: 'room' }, humanDelayMs: 400, autoSkipDialogue: false },
+    { kind: 'openShop', humanDelayMs: 400, autoSkipDialogue: false },
+    { kind: 'returnToMenu', humanDelayMs: 400, autoSkipDialogue: false },
+    { kind: 'startRun', character: 'REGENT', humanDelayMs: 400, autoSkipDialogue: false },
   ]);
   assert.deepEqual(waits, [180_000, 180_000, 180_000, 2000]);
 });
@@ -51,7 +51,7 @@ test('startRun uses the service completion allowance unless the caller overrides
   };
   const game = new ClientSts2(new EventEmitter(), endpoint);
   game.waitFor = async (_predicate, options) => waits.push(options.timeoutMs);
-  game.setSpectatorPacing(5000);
+  game.setHumanDelay(5000);
 
   await game.startRun();
   await game.startRun({ character: 'REGENT' });
@@ -1673,7 +1673,7 @@ test('a confirmed transform reports the observed old and new deck cards', async 
   assert.deepEqual(result.deckChanges.replacement, { before: old, after: fresh });
 });
 
-test('spectator pacing holds a real preview before confirmation and defaults to no dwell', async () => {
+test('human delay holds a real preview before confirmation and defaults to no dwell', async () => {
   const client = new EventEmitter();
   let done = false,
     clickedAt;
@@ -1705,15 +1705,16 @@ test('spectator pacing holds a real preview before confirmation and defaults to 
     },
   });
   const game = new Sts2(client, endpoint);
-  assert.throws(() => game.setSpectatorPacing(-1), RangeError);
-  game.setSpectatorPacing(30);
+  assert.throws(() => game.setHumanDelay(-1), RangeError);
+  assert.throws(() => game.setHumanDelay(0.5), RangeError);
+  game.setHumanDelay(30);
   const action = game.confirmSelection();
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(done, false);
   assert.equal((await game.state()).screen, 'CardPreview');
   await action;
   assert.ok(clickedAt - started >= 30);
-  game.setSpectatorPacing();
+  game.setHumanDelay();
 });
 
 test('explicit native abandon waits for the real resulting decision', async () => {

@@ -29,11 +29,11 @@ func _initialize() -> void:
 	adapter.workflow_callback = callback
 	assert(adapter.configure(registry) == "fixture:sts2")
 	var accepted = registry.operations.operate.call(
-		{ "kind": "playCards", "plays": ["Strike"], "pacingMs": 400.0 }
+		{ "kind": "playCards", "plays": ["Strike"], "humanDelayMs": 400.0 }
 	)
 	assert(accepted.operation == "fixture:operation")
 	assert(messages[0].command == "start" and messages[0].args.kind == "playCards")
-	assert(messages[0].args.pacingMs == 400.0)
+	assert(messages[0].args.humanDelayMs == 400.0)
 
 	registry.operations.operation.call({ "operation": "fixture:operation" })
 	assert(messages[1] == { "command": "status", "operation": "fixture:operation" })
