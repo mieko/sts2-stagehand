@@ -3,10 +3,10 @@
 ## REPL quick start
 
 See [setup and connection](../README.md#connect-and-play). Import/connect once in
-a persistent JS session; retain `game` between invocations:
+a persistent JS session started from this checkout. Reuse `game` between calls.
 
 ```js
-var { connectLocal } = await import('/absolute/path/to/sts2-stagehand/client/local.mjs');
+var { connectLocal } = await import('./client/local.mjs');
 var game = await connectLocal();
 var d = await game.decision();
 console.log(game.present(d));
@@ -16,10 +16,9 @@ Choose legal cards/targets from that observation. For example, with these cards
 in hand:
 
 ```js
-var result = await game.playCards([
-  {card: 'Strike', target: d.combat.enemies[0]},
-  'Defend',
-], {endTurn: true});
+var result = await game.playCards([{ card: 'Strike', target: d.combat.enemies[0] }, 'Defend'], {
+  endTurn: true,
+});
 console.log(game.present(result));
 ```
 
@@ -29,24 +28,25 @@ continuing. Batches stop at new choices or failures and retain applied progress.
 
 ## Observe and identify
 
-| Method | Result / behavior |
-| --- | --- |
-| `decision({wait: false})` | Decision kind, player resources, inventory, hand, enemies/intents/statuses, choices, prompt and `nextRooms`. May advance [forced presentation](#forced-presentation-versus-decisions). |
-| `ready()` / `decision({wait: true})` | Wait for a normalized decision. |
-| `brief()` | A compact decision, with the same normalization as `decision()`. |
-| `present(result, options)` | Pure compact projection of an existing decision/outcome; no game read or mutation. Also exported as `present`. |
-| `state()` | Passive rich state: visible map graph when open, raw UI types/bounds and tracked action. |
-| `deck({upgrades: false})` | Passive permanent-deck cards, including upgrades/modifiers. `true` adds each eligible card's next `upgrade`. |
-| `inspectCard(cardOrOffer, {upgrades: false})` | Passive rich card projection, including unowned reward/shop offers and selection cards. `true` adds the native next `upgrade` when eligible. |
-| `piles()` | Passive discard/exhaust and sorted public draw multiset, with `draw.order: "unknown"`. |
-| `waitFor(predicate, {timeoutMs, signal})` | Passive raw-state subscription wait; reads fresh state after subscribing. Default 30 seconds. |
-| `waitForAction(action, {timeoutMs})` | Passively await that native action's completion or next choice; returns state/decision without normalizing. |
-| `screenshot()` | Capture metadata (`width`, `height`, `mime`, etc.) plus `image: Buffer` containing PNG bytes. Save/display `shot.image`. |
-| `info()` | Passive native release version, commit, branch, release date and build-time assembly hash; works without a run. Missing metadata is unavailable. |
+| Method                                        | Result / behavior                                                                                                                                                                      |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decision({wait: false})`                     | Decision kind, player resources, inventory, hand, enemies/intents/statuses, choices, prompt and `nextRooms`. May advance [forced presentation](#forced-presentation-versus-decisions). |
+| `ready()` / `decision({wait: true})`          | Wait for a normalized decision.                                                                                                                                                        |
+| `brief()`                                     | A compact decision, with the same normalization as `decision()`.                                                                                                                       |
+| `present(result, options)`                    | Pure compact projection of an existing decision/outcome; no game read or mutation. Also exported as `present`.                                                                         |
+| `state()`                                     | Passive rich state: visible map graph when open, raw UI types/bounds and tracked action.                                                                                               |
+| `deck({upgrades: false})`                     | Passive permanent-deck cards, including upgrades/modifiers. `true` adds each eligible card's next `upgrade`.                                                                           |
+| `inspectCard(cardOrOffer, {upgrades: false})` | Passive rich card projection, including unowned reward/shop offers and selection cards. `true` adds the native next `upgrade` when eligible.                                           |
+| `piles()`                                     | Passive discard/exhaust and sorted public draw multiset, with `draw.order: "unknown"`.                                                                                                 |
+| `waitFor(predicate, {timeoutMs, signal})`     | Passive raw-state subscription wait; reads fresh state after subscribing. Default 30 seconds.                                                                                          |
+| `waitForAction(action, {timeoutMs})`          | Passively await that native action's completion or next choice; returns state/decision without normalizing.                                                                            |
+| `screenshot()`                                | Capture metadata (`width`, `height`, `mime`, etc.) plus `image: Buffer` containing PNG bytes. Save/display `shot.image`.                                                               |
+| `info()`                                      | Passive native release version, commit, branch, release date and build-time assembly hash; works without a run. Missing metadata is unavailable.                                       |
 
 Use passive reads when watching someone else's run. Descriptions/effects come
 from current game models and localized hover tips, not inferred hidden state.
-No shuffled draw order, future rewards, hidden room contents or RNG are exposed.
+The gameplay API omits shuffled draw order, future rewards, hidden room contents
+and RNG. The [developer endpoints](security.md) can inspect game internals.
 
 Identity rules:
 
@@ -65,27 +65,27 @@ Identity rules:
 
 ```js
 // At an observed card offer; inspection does not choose it.
-var offer = d.choices.find(choice => choice.label === 'Know Thy Place');
-var card = await game.inspectCard(offer, {upgrades: true});
-console.log({current: card.description, upgraded: card.upgrade?.description});
+var offer = d.choices.find((choice) => choice.label === 'Know Thy Place');
+var card = await game.inspectCard(offer, { upgrades: true });
+console.log({ current: card.description, upgraded: card.upgrade?.description });
 ```
 
 ## Play and choose
 
-| Method | Behavior |
-| --- | --- |
-| `play(cardOrExactName, enemyOrExactName?)` | Play through the native action path. |
-| `playCards(plays, {endTurn: false})` | Ordered plan. Entries are `{card, target?, select?}`, a name or an untargeted card object. Names resolve against the fresh hand at execution. `select` supplies an explicit selection card/list; otherwise new choices stop with `remaining`. `endTurn: true` waits for the next playable round, but is suppressed if combat ends. |
-| `endTurn()` | Wait for the next playable round or resulting decision. An enemy/start-of-turn choice returns `choice_required`: resolve it, then `waitForAction(result.action)`, not another end-turn. |
-| `usePotion(potion, enemy?)` / `discardPotion(potion)` | Native potion operations and observed outcomes. |
-| `throwPotionAtShopkeeper(potion)` | Use a currently offered `potion.targets` entry of kind `shopkeeper`, **before entering** inventory. Native Foul Potion behavior owns gold/dialogue/combat. Fake Merchant combat is not yet live-qualified. |
-| `choose(choiceOrExactLabel)` | Visible event, reward, rest, relic, menu, dialogue or other supported native choice. Ambiguous labels require an object. No implicit mouse fallback; unsupported controls require explicit `game.client` input. |
-| `pickCard(cardChoiceOrName)` | Choose from a reward/selection grid. |
-| `selectCards(cardOrList, {confirm: true})` | Explicit selection plan; `false` selects without completing the suspended parent action. |
-| `confirmSelection()` / `cancelSelection()` | Resolve actual selection previews. |
-| `upgradeCard(card)` / `removeCard(card)` | Explicit Smith/removal operation through selection and confirmation. |
-| `travel(room)` | Take a currently travelable room object. |
-| `proceed()` | Choose one clear Proceed/Confirm/Continue/Embark/Leave control; never silently skip a reward. |
+| Method                                                | Behavior                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `play(cardOrExactName, enemyOrExactName?)`            | Play through the native action path.                                                                                                                                                                                                                                                                                               |
+| `playCards(plays, {endTurn: false})`                  | Ordered plan. Entries are `{card, target?, select?}`, a name or an untargeted card object. Names resolve against the fresh hand at execution. `select` supplies an explicit selection card/list; otherwise new choices stop with `remaining`. `endTurn: true` waits for the next playable round, but is suppressed if combat ends. |
+| `endTurn()`                                           | Wait for the next playable round or resulting decision. An enemy/start-of-turn choice returns `choice_required`: resolve it, then `waitForAction(result.action)`, not another end-turn.                                                                                                                                            |
+| `usePotion(potion, enemy?)` / `discardPotion(potion)` | Native potion operations and observed outcomes.                                                                                                                                                                                                                                                                                    |
+| `throwPotionAtShopkeeper(potion)`                     | Use a currently offered `potion.targets` entry of kind `shopkeeper`, **before entering** inventory. Native Foul Potion behavior owns gold/dialogue/combat. Fake Merchant combat is not yet live-qualified.                                                                                                                         |
+| `choose(choiceOrExactLabel)`                          | Visible event, reward, rest, relic, menu, dialogue or other supported native choice. Ambiguous labels require an object. No implicit mouse fallback; unsupported controls require explicit `game.client` input.                                                                                                                    |
+| `pickCard(cardChoiceOrName)`                          | Choose from a reward/selection grid.                                                                                                                                                                                                                                                                                               |
+| `selectCards(cardOrList, {confirm: true})`            | Explicit selection plan; `false` selects without completing the suspended parent action.                                                                                                                                                                                                                                           |
+| `confirmSelection()` / `cancelSelection()`            | Resolve actual selection previews.                                                                                                                                                                                                                                                                                                 |
+| `upgradeCard(card)` / `removeCard(card)`              | Explicit Smith/removal operation through selection and confirmation.                                                                                                                                                                                                                                                               |
+| `travel(room)`                                        | Take a currently travelable room object.                                                                                                                                                                                                                                                                                           |
+| `proceed()`                                           | Choose one clear Proceed/Confirm/Continue/Embark/Leave control; never silently skip a reward.                                                                                                                                                                                                                                      |
 
 Selection choices enumerate the complete native eligible card list, including
 virtualized grids/combat-pile pickers. A choice can be `ready: true` while
@@ -93,15 +93,15 @@ virtualized grids/combat-pile pickers. A choice can be `ready: true` while
 
 ### Loot and shops
 
-| Method | Behavior |
-| --- | --- |
-| `openShop()` / `leaveShop()` | Enter/leave native shop UI. Automatic entry pauses when a usable potion offers a shopkeeper target. |
-| `buy(itemOrList)` | Visible shop objects or exact names, sequentially; each native purchase must finish before the next. Restocked offers get new references. Card removal opens a decision and stops the list. |
-| `claimRewards(list)` | Explicit visible rewards; stops at a new choice. |
-| `claimGold()` | Claim ordinary gold. |
-| `openCardReward()` | Open an ordinary `CardReward`, without choosing a card. Special/stolen-card rewards remain `special_card_reward` choices for `choose(offer)` or `claimRewards([offer])`. |
-| `takeRelic(offerOrName)` / `declineRelic()` | Explicitly resolve a relic offer. |
-| `pickBundle(bundleChoice, {confirm: true})` | Choose a visible bundle and confirm. Rare variants remain a compatibility limitation; inspect offered controls. |
+| Method                                                    | Behavior                                                                                                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openShop()` / `leaveShop()`                              | Enter/leave native shop UI. Automatic entry pauses when a usable potion offers a shopkeeper target.                                                                                         |
+| `buy(itemOrList)`                                         | Visible shop objects or exact names, sequentially; each native purchase must finish before the next. Restocked offers get new references. Card removal opens a decision and stops the list. |
+| `claimRewards(list)`                                      | Explicit visible rewards; stops at a new choice.                                                                                                                                            |
+| `claimGold()`                                             | Claim ordinary gold.                                                                                                                                                                        |
+| `openCardReward()`                                        | Open an ordinary `CardReward`, without choosing a card. Special/stolen-card rewards remain `special_card_reward` choices for `choose(offer)` or `claimRewards([offer])`.                    |
+| `takeRelic(offerOrName)` / `declineRelic()`               | Explicitly resolve a relic offer.                                                                                                                                                           |
+| `pickBundle(bundleChoice, {confirm: true})`               | Choose a visible bundle and confirm. Rare variants remain a compatibility limitation; inspect offered controls.                                                                             |
 | `setDivinationTool('big'\|'small')` / `divineCell({x,y})` | Native Crystal Sphere controls. `crystalSphere` exposes remaining divinations, tools and visible cells only. Final divination waits for native loot/next decision; rewards remain explicit. |
 
 `removeCard(card)` waits for confirmation **and** the parent purchase. If a prior
@@ -111,7 +111,7 @@ An already opened preview remains explicit: use `confirmSelection()` and
 `waitForAction(originalPurchaseAction)`.
 
 ```js
-await game.collectLoot({potions: true}); // Gold + potions, then open ordinary cards.
+await game.collectLoot({ potions: true }); // Gold + potions, then open ordinary cards.
 ```
 
 `collectLoot({gold: true, potions: false, relics: [], openCardReward: true}, options)`
@@ -128,15 +128,15 @@ boundary. Blocked potion choices retain `blockedReason`.
 
 ### Runs, results and unlocks
 
-| Method | Behavior |
-| --- | --- |
-| `startRun({character: "IRONCLAD"})` / `continueRun()` | Native single-player setup/continue. Start follows Standard after the first run; locked characters remain unavailable. |
-| `finishResults()` | Wait for and advance actual result controls; return latest `runResult`, outcome text and next decision. Epoch reveals/acknowledgements remain explicit. |
-| `revealEpoch(epochOrTitleOrId)` | Reveal an obtained epoch. |
-| `inspectEpoch(epochOrTitleOrId)` | Inspect an already completed epoch. |
-| `closeEpoch()` / `confirmUnlock()` | Explicit story/confirmation boundaries. Inspect the next decision: acknowledgements may be queued. |
-| `returnToMenu()` | Navigate when no run, tutorial or unlock operation blocks it; preserve pending epochs. |
-| `abandonRun()` | **Destructive:** abandon an in-progress single-player run through the native operation, then wait for game-over. Use `finishResults()` and handle unlocks explicitly; no unlock is guaranteed. Not for saved runs at the menu. |
+| Method                                                | Behavior                                                                                                                                                                                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `startRun({character: "IRONCLAD"})` / `continueRun()` | Native single-player setup/continue. Start follows Standard after the first run; locked characters remain unavailable.                                                                                                         |
+| `finishResults()`                                     | Wait for and advance actual result controls; return latest `runResult`, outcome text and next decision. Epoch reveals/acknowledgements remain explicit.                                                                        |
+| `revealEpoch(epochOrTitleOrId)`                       | Reveal an obtained epoch.                                                                                                                                                                                                      |
+| `inspectEpoch(epochOrTitleOrId)`                      | Inspect an already completed epoch.                                                                                                                                                                                            |
+| `closeEpoch()` / `confirmUnlock()`                    | Explicit story/confirmation boundaries. Inspect the next decision: acknowledgements may be queued.                                                                                                                             |
+| `returnToMenu()`                                      | Navigate when no run, tutorial or unlock operation blocks it; preserve pending epochs.                                                                                                                                         |
+| `abandonRun()`                                        | **Destructive:** abandon an in-progress single-player run through the native operation, then wait for game-over. Use `finishResults()` and handle unlocks explicitly; no unlock is guaranteed. Not for saved runs at the menu. |
 
 Tutorial/FTUE remains a `tutorial` decision: acknowledge its choice, then call
 `startRun()` again. Obtained, unrevealed epochs disable Singleplayer when no run
@@ -178,7 +178,7 @@ See [service operations](operations.md) for receipts, uncertain attempted steps 
 Only the latest service receipt is retained; process exit loses it. Diagnostic
 `operation(id)` reads that receipt; its service ID is not a native action ID for
 `waitForAction`. For a stalled instance, use the
-[recovery procedure](../README.md#recovering-an-unresponsive-instance).
+[recovery procedure](install.md#recovering-an-unresponsive-instance).
 
 ## Forced presentation versus decisions
 
@@ -218,17 +218,17 @@ Rich states and historical results are unchanged; this is a stateless projection
 Completed, error-free last actions are omitted from `pending` unless diagnostics
 are enabled; active parents, failures and cancellations remain visible.
 
-| State | Interpretation |
-| --- | --- |
-| Selection | Each selectable card appears once. Hand copies already in choices become `combat.handInChoices` references; other cards stay in `combat.hand`. Meaningful disabled choices remain visible. |
-| Companions | `combat.pets` retains real state, including dead Osty; `combat.allies` omits duplicates of player/pets. No character-based filtering hides stars, pets or orbs. |
-| Combat ending | `ongoing: true` with `noLivingEnemies: true` is **not victory**. `inactiveEnemies` has only retained dead creatures/public statuses, not future forms or revival predictions. Native hand/end-turn legality still applies. |
-| Orbs | `combat.orbOrder: "evoke_next_first"`; 1-based `queuePosition` and `evokeNext` preserve native queue order, not screen position/age. Effects can reorder it; Dualcast evokes the front orb twice before removing it. |
-| Intents | `damagePerHit`, `hits`, `totalDamage`, `isAttack`, `damageScope`; non-attack numbers are null. `combat.incoming` sums known local-player previews; unknown intents make the total unknown. These are not predicted HP loss. |
-| Surrounded | Native `player.facing` is Left/Right; enemy `relativePosition` has `side`/`behind` from Back Attack powers. Ambiguous side gives `behind: null`; outside Surrounded both position/facing are null. Not a facing command or damage prediction. |
-| Map | Compact `at`/`to` strings; raw `decision().map` keeps coordinate objects/edges. Boss identity comes from the visible icon, not hidden ordinary encounters. |
-| Crystal Sphere | One coordinate matrix: `?` covered, `.` uncovered empty, item type for a visible fragment. `revealedItems` contains native-revealed whole items only; fragments do not establish earned rewards. Raw controls remain individually addressable. |
-| Timeline/results | Compact Timeline summarizes locked/completed history but retains new reveals. `runResult` has native `win`, `score`, `stats`, animation phase and counts; HP zero during ending is not a loss signal. |
+| State            | Interpretation                                                                                                                                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Selection        | Each selectable card appears once. Hand copies already in choices become `combat.handInChoices` references; other cards stay in `combat.hand`. Meaningful disabled choices remain visible.                                                     |
+| Companions       | `combat.pets` retains real state, including dead Osty; `combat.allies` omits duplicates of player/pets. No character-based filtering hides stars, pets or orbs.                                                                                |
+| Combat ending    | `ongoing: true` with `noLivingEnemies: true` is **not victory**. `inactiveEnemies` has only retained dead creatures/public statuses, not future forms or revival predictions. Native hand/end-turn legality still applies.                     |
+| Orbs             | `combat.orbOrder: "evoke_next_first"`; 1-based `queuePosition` and `evokeNext` preserve native queue order, not screen position/age. Effects can reorder it; Dualcast evokes the front orb twice before removing it.                           |
+| Intents          | `damagePerHit`, `hits`, `totalDamage`, `isAttack`, `damageScope`; non-attack numbers are null. `combat.incoming` sums known local-player previews; unknown intents make the total unknown. These are not predicted HP loss.                    |
+| Surrounded       | Native `player.facing` is Left/Right; enemy `relativePosition` has `side`/`behind` from Back Attack powers. Ambiguous side gives `behind: null`; outside Surrounded both position/facing are null. Not a facing command or damage prediction.  |
+| Map              | Compact `at`/`to` strings; raw `decision().map` keeps coordinate objects/edges. Boss identity comes from the visible icon, not hidden ordinary encounters.                                                                                     |
+| Crystal Sphere   | One coordinate matrix: `?` covered, `.` uncovered empty, item type for a visible fragment. `revealedItems` contains native-revealed whole items only; fragments do not establish earned rewards. Raw controls remain individually addressable. |
+| Timeline/results | Compact Timeline summarizes locked/completed history but retains new reveals. `runResult` has native `win`, `score`, `stats`, animation phase and counts; HP zero during ending is not a loss signal.                                          |
 
 Deck-changing UI helpers (`choose`, `pickCard`, `selectCards`, `confirmSelection`,
 `upgradeCard`, `removeCard`) compare pre/post out-of-combat decks: `deckChanges`
@@ -243,11 +243,14 @@ A failed final observation retains the applied result in `error.outcome`, not pe
 On a separate observer connection:
 
 ```js
-var frame = await observer.spectate({timeoutMs: 20000});
+var frame = await observer.spectate({ timeoutMs: 20000 });
 if (frame) console.log(frame.view);
 // Later; retain the previous frame on idle timeout.
-var next = await observer.spectate({after: frame ?? undefined, timeoutMs: 20000});
-if (next) { frame = next; console.log(frame.view); }
+var next = await observer.spectate({ after: frame ?? undefined, timeoutMs: 20000 });
+if (next) {
+  frame = next;
+  console.log(frame.view);
+}
 ```
 
 `spectate({after, timeoutMs, signal})` passively returns `{position, boundary, view}`:
@@ -280,9 +283,8 @@ Ordinary semantic gameplay uses only the registered `Sts2` endpoint; it does not
 require Stagehand's `Object`, `SceneTree`, `Input` or `Script` builtin roots.
 Travel, shop entry, menu return and Standard run setup execute in the mod's shared
 [service operations](operations.md), with server-side validation and recovery receipts.
-`screenshot()` separately requires the optional `Screen` capability. The current
-mod startup still explicitly exposes all builtin roots for generic inspection,
-input and DevTools testing.
+`screenshot()` separately requires the optional `Screen` capability. The mod enables all
+builtin roots by default, including unrestricted GDScript execution. See [security](security.md).
 
 ## Advanced inspection and connection details
 
@@ -293,14 +295,14 @@ cost/type/target/upgrade facts with `costScope: "printed_related_card"`, not han
 or payment promises. Enchantments/afflictions include names, amounts, descriptions
 and extra text. `mechanics` clarifies native rules; it is not a rules engine.
 
-| Preview field | Meaning |
-| --- | --- |
-| `values` | Native numeric variable keys with `nativeType`, `base`, `enchanted`, `preview`, units (unknown = null), and native-backed `meaning` where available. Display parameters, not a full effect list; repetitions are not necessarily hits. Boolean/string variables are excluded. |
-| `valueContext.source` | `"cached_native_model"`: read existing values without recalculating the source. |
-| `descriptionPile` / `modelPile` | Formatter context / actual pile (null for unplaced offers/previews). |
-| `upgradePreview` | Native Deck/Combat/None upgrade context. Detached upgrade previews refresh native dynamic/enchantment values without changing the source. |
-| `globalHooksEligible` | Eligibility for combat-hand/play or combat-upgrade modifiers, not evidence that hooks ran. Selection and hand previews may differ. |
-| `target` / `prospectiveDamage` | `"not_recorded"` / `false`: no target simulation or promised per-enemy damage/HP loss. Preview values and payment costs are separate contexts, not future acquisition/turn guarantees. |
+| Preview field                   | Meaning                                                                                                                                                                                                                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `values`                        | Native numeric variable keys with `nativeType`, `base`, `enchanted`, `preview`, units (unknown = null), and native-backed `meaning` where available. Display parameters, not a full effect list; repetitions are not necessarily hits. Boolean/string variables are excluded. |
+| `valueContext.source`           | `"cached_native_model"`: read existing values without recalculating the source.                                                                                                                                                                                               |
+| `descriptionPile` / `modelPile` | Formatter context / actual pile (null for unplaced offers/previews).                                                                                                                                                                                                          |
+| `upgradePreview`                | Native Deck/Combat/None upgrade context. Detached upgrade previews refresh native dynamic/enchantment values without changing the source.                                                                                                                                     |
+| `globalHooksEligible`           | Eligibility for combat-hand/play or combat-upgrade modifiers, not evidence that hooks ran. Selection and hand previews may differ.                                                                                                                                            |
+| `target` / `prospectiveDamage`  | `"not_recorded"` / `false`: no target simulation or promised per-enemy damage/HP loss. Preview values and payment costs are separate contexts, not future acquisition/turn guarantees.                                                                                        |
 
 Result phases follow native readiness: `outcome`, `summary_animation`,
 `earned_epochs`, `summary` (no earned epochs), `leaderboard`, `transition`.
@@ -318,25 +320,24 @@ Snapshots are plain data. Raw game metadata uses `inspect({kind: "game"})`, sour
 from native `ReleaseInfoManager`, not engine/session metadata.
 
 `game.client` exposes generic inspection/input. `close()` closes the connection,
-not the game or accepted work. Adopt matching DLL/PCK/client together; old generic
-`game` registration is not an StS2 wrapper. Changed imports require a fresh module
-graph/kernel, not just a new socket. See [README](../README.md) for deployment,
-isolation and compatibility limits.
+leaving the game and accepted work running. Use a matching DLL, PCK and client.
+Restart the JS session after changing client code. See [installation](install.md)
+for deployment, isolation and compatibility limits.
 
 Use Stagehand's named builtin methods for generic inspection and input. Native
 nodes retain reflection methods such as `get()` and `call()`:
 
 ```js
 var tree = await game.client.builtin('SceneTree');
-var menu = (await tree.query({name: 'MainMenu'})).nodes[0]?.node;
+var menu = (await tree.query({ name: 'MainMenu' })).nodes[0]?.node;
 if (menu) console.log(await menu.get('visible'));
 ```
 
-See Stagehand's [wrapper factories](../stagehand/client/README.md#wrapper-factories)
+See Stagehand's [wrapper factories](https://github.com/mieko/stagehand/blob/5fdc49f03fe6099a8c4ad174561212a3e0f433b6/client/README.md#wrapper-factories)
 to add client helpers while retaining the standard methods.
 
 For bounded in-engine readings, use
 `await game.client.builtin('PropertyRecorder')`. It is explicitly enabled alongside
 the other developer tools, including `Script` for scripted tracks. Recording is
 explicit; semantic gameplay does not start it. See Stagehand's
-[recording guide](../stagehand/docs/recording.md) for sampling, retrieval and lifecycle.
+[recording guide](https://github.com/mieko/stagehand/blob/5fdc49f03fe6099a8c4ad174561212a3e0f433b6/docs/recording.md) for sampling, retrieval and lifecycle.

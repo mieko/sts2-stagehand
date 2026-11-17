@@ -1,9 +1,10 @@
 # Service operations
 
-The mod executes ordered plans, selections, purchases, rewards, native choices
-and forced settlement for every client language. The JS facade adds FIFO, waits,
-presentation, specialized helpers and session-local deck comparisons—not a
-second batch executor. For gameplay methods, use the [API reference](api.md).
+The `Sts2` endpoint executes ordered plans, selections, purchases and rewards in
+the game. Any WebSocket client can submit the same plans and read their results.
+The [JavaScript API](api.md) adds a local queue, completion waits, presentation
+and deck comparisons. The same authenticated connection can also access the
+[developer endpoints](security.md).
 
 Discover the registered `Sts2` object through Stagehand. `operate` submits work;
 `operation` reads its receipt. Both use ordinary `object.call`, alongside native
@@ -15,12 +16,15 @@ Submit using current card/target references:
 
 ```json
 {
-  "jsonrpc": "2.0", "id": "plan-1", "method": "object.call",
+  "jsonrpc": "2.0",
+  "id": "plan-1",
+  "method": "object.call",
   "params": {
-    "object": "THE_STS2_ENDPOINT_ID", "method": "operate",
+    "object": "THE_STS2_ENDPOINT_ID",
+    "method": "operate",
     "params": {
       "kind": "playCards",
-      "plays": [{"card": "Strike", "target": {"ref": "THE_ENEMY_REF"}}, "Defend"],
+      "plays": [{ "card": "Strike", "target": { "ref": "THE_ENEMY_REF" } }, "Defend"],
       "endTurn": true
     }
   }
@@ -30,7 +34,12 @@ Submit using current card/target references:
 The RPC result acknowledges acceptance, not completion:
 
 ```json
-{"operation": "THE_OPERATION_ID", "kind": "playCards", "status": "accepted", "completionTimeoutMs": 150000}
+{
+  "operation": "THE_OPERATION_ID",
+  "kind": "playCards",
+  "status": "accepted",
+  "completionTimeoutMs": 150000
+}
 ```
 
 Subscribe to `changed` **before** reading the observation to avoid missing a fast
@@ -43,10 +52,13 @@ At a stop, fetch the receipt:
 
 ```json
 {
-  "jsonrpc": "2.0", "id": "result-1", "method": "object.call",
+  "jsonrpc": "2.0",
+  "id": "result-1",
+  "method": "object.call",
   "params": {
-    "object": "THE_STS2_ENDPOINT_ID", "method": "operation",
-    "params": {"operation": "THE_OPERATION_ID"}
+    "object": "THE_STS2_ENDPOINT_ID",
+    "method": "operation",
+    "params": { "operation": "THE_OPERATION_ID" }
   }
 }
 ```
@@ -72,19 +84,19 @@ to another caller. An expired/unknown ID does not mean its actions failed.
 
 ## Operations
 
-| `kind` | Parameters and defaults |
-| --- | --- |
-| `playCards` | `plays`: names/current card objects or `{card, target?, select?}`. `select` is an explicit choice/list. Optional `endTurn: false`. |
-| `selectCards` | `cards`: name/current choice or list. Select unselected copies; optional `confirm: true` confirms when enabled. |
-| `buy` | `items`: offer name/current object or list; resolve each against the shop after the preceding purchase. |
-| `claimRewards` | `items`: reward name/current object or list. No implicit card/relic choice. |
-| `collectLoot` | Optional `gold: true`, `potions: false` (boolean/list), `relics: []` (explicit list only), `openCardReward: true`. Claim requested loot, then open ordinary cards without picking; leave special rewards explicit. |
-| `choose` | `choice`: current object, exact label or reference. Activate its native handler and wait for the changed ready position. |
-| `travel` | `room`: a currently travelable map-room object/reference object. Revalidates current map membership and native legality after pacing; waits for ready arrival on a different floor/act. |
-| `openShop` | Enter the current ordinary/Fake Merchant inventory through its native handler. Explicit entry may pass a shopkeeper-potion decision; automatic settlement still stops there. Already open returns `ready`. |
-| `returnToMenu` | Pop the current native menu stack only while no run/tutorial/unlock operation blocks it. Revalidates each pop and waits for ready menu transitions; preserves pending epochs. |
-| `startRun` | Optional `character`: exact visible name or native character ID. Follows native Singleplayer/Standard identity, selects an available character and confirms. Tutorial/FTUE/unlock boundaries remain explicit. |
-| `settle` | Perform [forced presentation](api.md#forced-presentation-versus-decisions). Optional `outcome` preserves prior progress, not authority to act on stale state. |
+| `kind`         | Parameters and defaults                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `playCards`    | `plays`: names/current card objects or `{card, target?, select?}`. `select` is an explicit choice/list. Optional `endTurn: false`.                                                                                 |
+| `selectCards`  | `cards`: name/current choice or list. Select unselected copies; optional `confirm: true` confirms when enabled.                                                                                                    |
+| `buy`          | `items`: offer name/current object or list; resolve each against the shop after the preceding purchase.                                                                                                            |
+| `claimRewards` | `items`: reward name/current object or list. No implicit card/relic choice.                                                                                                                                        |
+| `collectLoot`  | Optional `gold: true`, `potions: false` (boolean/list), `relics: []` (explicit list only), `openCardReward: true`. Claim requested loot, then open ordinary cards without picking; leave special rewards explicit. |
+| `choose`       | `choice`: current object, exact label or reference. Activate its native handler and wait for the changed ready position.                                                                                           |
+| `travel`       | `room`: a currently travelable map-room object/reference object. Revalidates current map membership and native legality after pacing; waits for ready arrival on a different floor/act.                            |
+| `openShop`     | Enter the current ordinary/Fake Merchant inventory through its native handler. Explicit entry may pass a shopkeeper-potion decision; automatic settlement still stops there. Already open returns `ready`.         |
+| `returnToMenu` | Pop the current native menu stack only while no run/tutorial/unlock operation blocks it. Revalidates each pop and waits for ready menu transitions; preserves pending epochs.                                      |
+| `startRun`     | Optional `character`: exact visible name or native character ID. Follows native Singleplayer/Standard identity, selects an available character and confirms. Tutorial/FTUE/unlock boundaries remain explicit.      |
+| `settle`       | Perform [forced presentation](api.md#forced-presentation-versus-decisions). Optional `outcome` preserves prior progress, not authority to act on stale state.                                                      |
 
 Common options:
 
@@ -101,10 +113,10 @@ controls fail explicitly; use generic Stagehand input/inspection if needed.
 Plans are sequential, not atomic. Failure/cancellation leaves earlier steps
 applied and stops the plan.
 
-| Stop | Retained progress / next step |
-| --- | --- |
-| `choice_required` | The native action may still be waiting; its ID/status remain in `state.pending` and the step receipt. Resolve the selection, then observe that same action. Inspect the new position before submitting the unsubmitted tail; it never auto-resumes. |
-| `unconfirmed` | Uncertain activation or post-acceptance observation failure. Retains the attempted action/choice and earlier results; the attempted step is **excluded** from `remaining`. Its post-action `state` may be null and the action may still be running. Do not replay it; inspect when observation returns. |
+| Stop                          | Retained progress / next step                                                                                                                                                                                                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `choice_required`             | The native action may still be waiting; its ID/status remain in `state.pending` and the step receipt. Resolve the selection, then observe that same action. Inspect the new position before submitting the unsubmitted tail; it never auto-resumes.                                                                                      |
+| `unconfirmed`                 | Uncertain activation or post-acceptance observation failure. Retains the attempted action/choice and earlier results; the attempted step is **excluded** from `remaining`. Its post-action `state` may be null and the action may still be running. Do not replay it; inspect when observation returns.                                  |
 | Failed/unconfirmed settlement | Outer state is last observed (`stateScope: "last_observed"`); unavailable `automaticOutcome.state` stays null. Applied results, outcome text and completed `automaticSteps` survive. `executionStatus` preserves the preceding execution result; `automaticOutcome` describes presentation failure and outer `status` the composed stop. |
 
 Explicit selection plans wait for each selection's change, confirmation, and the
@@ -133,7 +145,7 @@ epochs. Settlement failure cannot undo an action or make it safe to replay.
 Accepted work belongs to the running mod. Socket closure, lost responses, aborted
 waits and client deadlines do not cancel it. It runs to completion, choice or
 failure. There is no automatic reconnect/replay; process exit loses receipts.
-Native save recovery is [separate](../README.md#recovering-an-unresponsive-instance).
+Native save recovery is [separate](install.md#recovering-an-unresponsive-instance).
 
 Only one service operation runs at a time. Concurrent `operate` and external
 low-level native requests/card selections are refused while it runs; passive reads
@@ -143,13 +155,13 @@ step validates current state.
 JS callers use [recovery and queue resumption](api.md#queue-and-completion-contract).
 Service operation IDs differ from native action IDs used by `waitForAction()`.
 
-| Wait | Default / meaning |
-| --- | --- |
-| Connection/handshake and each RPC | 10 seconds; independent of gameplay. |
-| `completionTimeoutMs` | 60-second settlement margin + (30 seconds + pacing) per planned activation, including selections, confirmation and end-turn. `collectLoot` budgets visible rewards plus opening cards; `startRun` allows four activations and `returnToMenu` uses the current menu depth. |
-| Single low-level native action | 60 seconds. |
-| Passive `waitFor` / spectator | 30 seconds. |
-| UI confirmation | Eight-second bound. |
+| Wait                              | Default / meaning                                                                                                                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection/handshake and each RPC | 10 seconds; independent of gameplay.                                                                                                                                                                                                                                      |
+| `completionTimeoutMs`             | 60-second settlement margin + (30 seconds + pacing) per planned activation, including selections, confirmation and end-turn. `collectLoot` budgets visible rewards plus opening cards; `startRun` allows four activations and `returnToMenu` uses the current menu depth. |
+| Single low-level native action    | 60 seconds.                                                                                                                                                                                                                                                               |
+| Passive `waitFor` / spectator     | 30 seconds.                                                                                                                                                                                                                                                               |
+| UI confirmation                   | Eight-second bound.                                                                                                                                                                                                                                                       |
 
 The JS facade uses `completionTimeoutMs`; other clients can read it from acceptance.
 Explicit `timeoutMs` overrides only the local completion wait. These are wait
