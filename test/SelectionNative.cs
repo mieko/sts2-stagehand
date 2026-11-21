@@ -368,3 +368,11 @@ if (submenuStack.GetMethod("Pop", nativeFlags)?.ReturnType != typeof(void)
         != typeof(Stack<MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenu>))
     throw new Exception("Native menu navigation/depth bindings changed");
 Console.WriteLine("Native navigation bindings: owned Standard/Singleplayer, typed map handler, private Fake Merchant handler and menu stack verified");
+
+var administration = typeof(Sts2Host).GetMethod("IsAdministrationType", BindingFlags.NonPublic | BindingFlags.Static)!;
+foreach (var type in new[] { typeof(MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsScreen), typeof(MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsPanel) })
+    if (!(bool)administration.Invoke(null, [type])!)
+        throw new Exception("Local settings must not be exposed as gameplay choices");
+if ((bool)administration.Invoke(null, [typeof(MegaCrit.Sts2.Core.Nodes.Screens.Map.NMapScreen)])!)
+    throw new Exception("Map gameplay is not an administrative control");
+Console.WriteLine("Native settings boundary: settings screen/panel excluded, gameplay retained");

@@ -1,14 +1,14 @@
 // Opens Settings and returns to the menu in a running qualification copy.
-// STAGEHAND_URL=ws://127.0.0.1:PORT STAGEHAND_TOKEN=... node tools/prove.mjs
+// STAGEHAND_URL=http://127.0.0.1:PORT STAGEHAND_TOKEN=... node tools/prove.mjs
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
-import { connect, GodotValue } from 'godot-stagehand';
+import { connect, GodotValue } from '../client/sts2.mjs';
 
 const game = await connect(process.env.STAGEHAND_URL, { token: process.env.STAGEHAND_TOKEN });
 try {
-  const tree = await game.builtin('SceneTree');
-  const input = await game.builtin('Input');
-  const screen = await game.builtin('Screen');
+  const tree = await game.root('SceneTree');
+  const input = await game.root('Input');
+  const screen = await game.root('Screen');
   const { root } = await tree.current();
   const menu = (await tree.query({ name: 'MainMenu' })).nodes[0].node;
   const settings = (await tree.query({ root: menu, name: 'SettingsScreen' })).nodes[0].node;

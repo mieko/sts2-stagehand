@@ -16,7 +16,7 @@ export async function connectLocal({
   let url = session.url;
   if (!url) {
     if (!session.log)
-      throw new Error('Session has no URL/log. Relaunch with tools/launch-isolated.py.');
+      throw new Error('Session has no URL/log. Relaunch with tools/launch-isolated.mjs.');
 
     const deadline = Date.now() + waitMs;
     let port;
@@ -29,9 +29,10 @@ export async function connectLocal({
 
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    url = `ws://127.0.0.1:${port}`;
+    url = `http://127.0.0.1:${port}`;
   }
-  return connectSts2(url, {
+  return connectSts2({
+    url,
     token: session.token,
     WebSocket: globalThis.WebSocket ?? require('ws'),
     ...options,

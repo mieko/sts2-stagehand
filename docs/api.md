@@ -2,15 +2,19 @@
 
 ## REPL quick start
 
-See [setup and connection](../README.md#connect-and-play). Import/connect once in
-a persistent JS session started from this checkout. Reuse `game` between calls.
+Download `/client.mjs` from the Stagehand address or use the copy from the
+install ZIP. Import/connect once in a persistent Node.js 22+ session and reuse
+`game` between calls. See [setup and connection](https://github.com/mieko/sts2-stagehand#connect-and-play).
 
 ```js
-var { connectLocal } = await import('./client/local.mjs');
-var game = await connectLocal();
+var { connectSts2 } = await import('./client.mjs');
+var game = await connectSts2({ url: 'http://localhost:27120' });
 var d = await game.decision();
 console.log(game.present(d));
 ```
+
+If **Settings → Stagehand** shows that an access token is required, also pass
+`token` with the key from **Copy** beside **Connection Details**.
 
 Choose legal cards/targets from that observation. For example, with these cards
 in hand:
@@ -46,7 +50,7 @@ continuing. Batches stop at new choices or failures and retain applied progress.
 Use passive reads when watching someone else's run. Descriptions/effects come
 from current game models and localized hover tips, not inferred hidden state.
 The gameplay API omits shuffled draw order, future rewards, hidden room contents
-and RNG. The [developer endpoints](security.md) can inspect game internals.
+and RNG. The [developer endpoints](https://github.com/mieko/sts2-stagehand/blob/main/docs/security.md) can inspect game internals.
 
 Identity rules:
 
@@ -173,12 +177,13 @@ sequentially, **not atomically**. Results retain final `state`/`decision`, histo
   local gameplay wait, not independent connection/RPC deadlines (10 seconds by
   default). Disconnects/deadlines do not cancel accepted work or authorize replay.
 
-See [service operations](operations.md) for receipts, uncertain attempted steps and
-[completion allowances/lifetime](operations.md#lifetime-and-client-responsibilities).
-Only the latest service receipt is retained; process exit loses it. Diagnostic
+See [service operations](https://github.com/mieko/sts2-stagehand/blob/main/docs/operations.md) for receipts, uncertain attempted steps and
+[completion allowances/lifetime](https://github.com/mieko/sts2-stagehand/blob/main/docs/operations.md#lifetime-and-client-responsibilities).
+Only the latest service receipt is retained until the connection service is reconfigured
+or the game exits. Diagnostic
 `operation(id)` reads that receipt; its service ID is not a native action ID for
 `waitForAction`. For a stalled instance, use the
-[recovery procedure](install.md#recovering-an-unresponsive-instance).
+[recovery procedure](https://github.com/mieko/sts2-stagehand/blob/main/docs/install.md#recovering-an-unresponsive-instance).
 
 ## Forced presentation versus decisions
 
@@ -282,9 +287,9 @@ Default/reset `setHumanDelay()` is zero; range 0–5000 whole milliseconds. This
 Ordinary semantic gameplay uses only the registered `Sts2` endpoint; it does not
 require Stagehand's `Object`, `SceneTree`, `Input` or `Script` builtin roots.
 Travel, shop entry, menu return and Standard run setup execute in the mod's shared
-[service operations](operations.md), with server-side validation and recovery receipts.
-`screenshot()` separately requires the optional `Screen` capability. The mod enables all
-builtin roots by default, including unrestricted GDScript execution. See [security](security.md).
+[service operations](https://github.com/mieko/sts2-stagehand/blob/main/docs/operations.md), with server-side validation and recovery receipts.
+`screenshot()` separately requires the optional `Screen` capability. Developer Mode adds the
+builtin roots, including unrestricted GDScript execution; it defaults off. See [security](https://github.com/mieko/sts2-stagehand/blob/main/docs/security.md).
 
 ## Advanced inspection and connection details
 
@@ -310,34 +315,39 @@ Result phases follow native readiness: `outcome`, `summary_animation`,
 counts obtained unrevealed epochs; `scoreUnlocksRemaining` is a separate score pool.
 `finishResults().runResult` preserves the latest summary/counts before leaving.
 
-`connectSts2(url, {token, WebSocket})` discovers the registered `Sts2` endpoint.
-For generic Stagehand clients, pass exported `sts2Wrappers` to `connect()` and
-use `await client.findObject('Sts2')`. `connectSts2(url, {client})` installs the
+`connectSts2({url, token, WebSocket})` discovers the registered `Sts2` endpoint.
+The default URL is the HTTP base address `http://localhost:27120`. Stagehand
+derives the WebSocket endpoint at `/rpc`. Omit `token` only if the host disabled
+authentication. The bundle also exports the generic Stagehand API. Pass
+`sts2Wrappers` to `connect(url, {token, wrappers: sts2Wrappers})` and
+use `await client.findObject('Sts2')`. `connectSts2({client})` installs the
 factory on an existing client without replacing other wrappers; discovery failure
 closes only a connection it created. One facade per connection/endpoint shares
 FIFO, recovery, pacing and spectator state; separate connections are independent.
-Snapshots are plain data. Raw game metadata uses `inspect({kind: "game"})`, sourced
+Snapshots are plain data. `info().mod` includes the mod version, Developer Mode,
+and the service URLs in `resources.apiDocs`, `resources.gameDocs`, and
+`resources.jsEntrypoint`. Raw game metadata uses `inspect({kind: "game"})`, sourced
 from native `ReleaseInfoManager`, not engine/session metadata.
 
 `game.client` exposes generic inspection/input. `close()` closes the connection,
 leaving the game and accepted work running. Use a matching DLL, PCK and client.
-Restart the JS session after changing client code. See [installation](install.md)
+Restart the JS session after changing client code. See [installation](https://github.com/mieko/sts2-stagehand/blob/main/docs/install.md)
 for deployment, isolation and compatibility limits.
 
-Use Stagehand's named builtin methods for generic inspection and input. Native
+With Developer Mode enabled, use Stagehand's named builtin methods for inspection and input. Native
 nodes retain reflection methods such as `get()` and `call()`:
 
 ```js
-var tree = await game.client.builtin('SceneTree');
+var tree = await game.client.root('SceneTree');
 var menu = (await tree.query({ name: 'MainMenu' })).nodes[0]?.node;
 if (menu) console.log(await menu.get('visible'));
 ```
 
-See Stagehand's [wrapper factories](https://github.com/mieko/stagehand/blob/5fdc49f03fe6099a8c4ad174561212a3e0f433b6/client/README.md#wrapper-factories)
+See Stagehand's [wrapper factories](https://github.com/mieko/stagehand/blob/584d2c302d6ba5b303d862496a8a5a258b08001c/client/README.md#wrapper-factories)
 to add client helpers while retaining the standard methods.
 
 For bounded in-engine readings, use
-`await game.client.builtin('PropertyRecorder')`. It is explicitly enabled alongside
+`await game.client.root('PropertyRecorder')`. It is available in Developer Mode alongside
 the other developer tools, including `Script` for scripted tracks. Recording is
 explicit; semantic gameplay does not start it. See Stagehand's
-[recording guide](https://github.com/mieko/stagehand/blob/5fdc49f03fe6099a8c4ad174561212a3e0f433b6/docs/recording.md) for sampling, retrieval and lifecycle.
+[recording guide](https://github.com/mieko/stagehand/blob/584d2c302d6ba5b303d862496a8a5a258b08001c/docs/recording.md) for sampling, retrieval and lifecycle.

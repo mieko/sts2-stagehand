@@ -1,107 +1,101 @@
-# Installation
+# Install
 
-The launcher expects the macOS arm64 Steam version of Slay the Spire 2. Use Steam's
-**Manage → Browse local files** to locate the installed app. You also need
-Node.js 22+, Python 3, .NET SDK 10 and a Godot 4.5 editor executable for resource
-packing. The C# mod links against the locally installed game's assemblies.
+## Download and enable
 
-Clone with the Stagehand submodule and install the JavaScript dependencies:
+1. Download `sts2-stagehand-VERSION.zip` from
+   [Releases](https://github.com/mieko/sts2-stagehand/releases).
+2. In Steam, select **Slay the Spire 2 → Manage → Browse local files**.
+3. Create a `mods` folder if needed, then extract the ZIP there. The resulting
+   layout must be `mods/RuntimeControl/RuntimeControl.json`, alongside
+   `RuntimeControl.dll` and `RuntimeControl.pck`.
+4. Launch the game and accept its mod-loading prompt. If the game exits after
+   saving your consent, launch again.
 
-```sh
-git clone --recurse-submodules https://github.com/mieko/sts2-stagehand.git
-cd sts2-stagehand
-npm ci
+On macOS, put `mods` inside **SlayTheSpire2.app → Contents → MacOS** (right-click
+and choose **Show Package Contents**). On Windows and Linux, use the game directory
+opened by Steam. Keep the DLL, PCK, manifest, client and docs together when updating.
+Quit the game before replacing the folder.
+
+The game manages modded saves and any first-launch save-copy prompt. This mod does
+not copy, reset or edit profiles. Remove `RuntimeControl` to uninstall; the game's
+modded saves remain.
+
+## Settings and connection details
+
+After launch, the gameplay API is available at **http://localhost:27120**
+without an access token. Open **Settings → Stagehand** to see the active
+address or change how clients connect.
+
+- **Enable Stagehand** starts or stops the service.
+- **Allow Remote Connections** permits a non-loopback listener and turns on
+  **Require Access Token**. It uses all network interfaces unless you set an
+  explicit listen address.
+- **Require Access Token** is off by default for the localhost listener.
+- **Access Token** sets a shared key that persists across launches. When
+  authentication is required, leave it blank to use a launch-generated key.
+- **Developer Mode** exposes arbitrary code execution and debugger tools. It defaults off.
+
+Select **Copy** beside **Connection Details** to copy the active address. If
+authentication is enabled, it also copies the token and links to the matching
+client and APIs. These details are also in `RuntimeControl/connection.json` in
+the game's user-data directory.
+
+Select **Apply** to save and activate changes to the switches or token field.
+Finish any active gameplay action first. Changes to the running connection
+disconnect clients and clear the previous session's references and operation
+receipt.
+
+The listener uses port **27120**, shared across available IPv4 and IPv6 loopback
+interfaces. Use `http://localhost:27120` for discovery and JavaScript clients.
+The RPC WebSocket is at `ws://localhost:27120/rpc`. For another machine,
+substitute the game's LAN hostname or IP. See [security](security.md) for
+remote access and encryption.
+
+## Advanced configuration
+
+Create `RuntimeControl/settings.json` inside the game's user-data directory
+(the directory containing its logs). The settings tab saves its switches here,
+and you can edit advanced options while the game is closed. For example:
+
+```json
+{
+  "port": 27120,
+  "listenAddress": "localhost",
+  "developerMode": false
+}
 ```
 
-For an existing clone, run `git submodule update --init --recursive` before
-`npm ci`.
+`listenAddress` accepts `localhost` (both available loopbacks), `*` (all interfaces)
+or an IP address without an interface scope. Non-loopback addresses require
+`allowRemoteConnections: true`. Tokenless access requires remote connections off
+and the default loopback address, `localhost`. A saved `accessToken`, enabled
+Developer Mode, enabled remote connections, or a custom address other than
+`localhost` makes authentication the default when `requireAccessToken` is
+omitted. `port: 0` selects an available port. The `enabled` key controls whether
+Stagehand starts.
+Invalid settings stop startup and report the cause in the game log.
 
-## Prepare the isolated copy
+For launcher integration, `STAGEHAND_TOKEN`, `STAGEHAND_PORT`, `STAGEHAND_LISTEN`
+and `STAGEHAND_DEVELOPER` override their corresponding settings. They are not
+required for normal installation. An explicitly empty `STAGEHAND_TOKEN` disables
+authentication when the effective listen address is `localhost` and remote
+connections are off. Only the key set in the **Access Token** field or `settings.json`
+persists. Generated and environment-supplied keys are session settings.
 
-Start with an empty `.local/instance/` in the checkout. Replace the first path
-below with the actual app you located in Steam. The launcher expects the copy
-to be named `SlayTheSpire2.app`.
+## Compatibility and recovery
 
-```sh
-GAME_APP="/path/to/installed/SlayTheSpire2.app"
-INSTANCE="$PWD/.local/instance"
-mkdir -p "$INSTANCE"
-ditto "$GAME_APP" "$INSTANCE/SlayTheSpire2.app"
-```
-
-Create `.local/instance/SlayTheSpire2.app/Contents/MacOS/override.cfg` in the
-**copy** with these settings:
-
-```ini
-[application]
-config/use_custom_user_dir=true
-config/custom_user_dir_name="stagehand-sts2-local"
-```
-
-Give each instance a distinct profile name beginning with `stagehand-sts2-`.
-Keep that name across relaunches to retain runs and unlocks. Existing
-`runtime-control-sts2-` profiles are also accepted.
-
-## Build and launch
-
-Set `GODOT45` to the Godot 4.5 executable on your machine:
-
-```sh
-GODOT45="/path/to/Godot.app/Contents/MacOS/Godot"
-GAME_DATA_DIR="$INSTANCE/SlayTheSpire2.app/Contents/Resources/data_sts2_macos_arm64"
-python3 tools/build.py --game-data "$GAME_DATA_DIR" --godot "$GODOT45"
-python3 tools/launch-isolated.py
-```
-
-The build reads `sts2.dll` and `GodotSharp.dll`, compiles the managed mod
-(targeting .NET 9) and packs the GDScript resources in `build/`. The launcher
-copies the DLL, PCK and manifest into the isolated app, turns off Steam
-integration and generates a token for this launch. It writes a private
-`session.json` and timestamped logs under the instance directory.
-On first launch the game may save mod consent and exit. If it does, run the
-launcher again. Connect using the [JavaScript example](../README.md#connect-and-play).
-
-Quit the isolated copy before rebuilding and relaunching. Keep the DLL, PCK and
-client from the same revision. The native mod ID and filenames are
-`RuntimeControl` for compatibility with existing saves.
-
-To use another instance directory, pass `--directory /path/to/instance` to the
-launcher and `{directory: '/path/to/instance'}` to `connectLocal()`. The build
-accepts `--output` and the launcher accepts the corresponding `--artifacts`.
-Use the build's `--core` option to select a different Stagehand checkout.
-
-## Compatibility
-
-On macOS arm64, Standard runs have been tested through Act 3 on v0.107.1.
-On v0.111.1 (Steam build 26655341, MegaDot 4.5.1-m.14), live gameplay checks
-extend through first combat, ordinary rewards and returning to the map. Later
-combat, results and unlocks on that build are unverified. Rare bundle screens
-and Fake Merchant potion combat have limited coverage. The gameplay API covers
-single-player Standard runs. Daily, Custom and co-op setup are outside its scope.
-Updates to the game's private UI fields can require a mod update.
+The gameplay API supports single-player Standard runs. Daily, Custom and co-op
+setup are outside its scope. Game updates can change private UI fields and require
+a mod update. This build targets v0.111.1 or later. Live gameplay coverage on
+v0.111.1 (Steam build 26655341, MegaDot 4.5.1-m.14) extends through first combat,
+ordinary rewards and returning to the map on macOS arm64. Windows/Linux
+runtime and later encounters on v0.111.1 still need qualification.
+Rare bundle screens and Fake Merchant potion combat have limited coverage.
 
 ### Recovering an unresponsive instance
 
-Known failures include native GC/finalizer stalls and an invalid-free crash.
-The cause of the crash is unknown.
-A stalled game can stop answering even passive reads. If the instance cannot
-recover, keep the logs, quit the isolated copy and relaunch with the same profile.
-Use the game's Continue command and inspect the restored position. Actions
-completed in memory may be newer than the last native save.
-
-## Tests
-
-Run from the checkout after `npm ci`:
-
-| Command                                                     | What it checks                                                                                                  |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `npm test`                                                  | JS client, managed workflow service and Python launcher. Uses .NET SDK 10 and game-free fixtures.               |
-| `npm run test:host`                                         | Unordered card lists in C# without game assemblies.                                                             |
-| `npm run test:presentation`                                 | JavaScript presentation only.                                                                                   |
-| `npm run test:registration -- --godot "$GODOT45"`           | GDScript endpoint registration and passive status reads in a temporary Godot project.                           |
-| `npm run test:selection -- -p:GameDataDir="$GAME_DATA_DIR"` | Native card models, selection, costs, upgrades and ending phases. Build the mod against those assemblies first. |
-
-The selection test loads `Sentry.Godot.dll` and `Sentry.dll` from the selected
-game and runs without native nodes or saves. An engine-extension-not-loaded
-notice is expected in this test process. For a custom build directory add
-`-p:HostBuildDir=/absolute/path/to/output`.
+Known native failures include GC/finalizer stalls and an invalid-free crash;
+the causes remain unresolved. If even passive reads stop responding, retain the
+logs, quit and relaunch using the same profile. Use native Continue and inspect
+the actual restoration. In-memory actions may be newer than the last native save;
+never replay them just to reconstruct the previous position.

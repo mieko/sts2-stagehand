@@ -1,11 +1,10 @@
-import { createRequire } from 'node:module';
+import { connect } from 'godot-stagehand';
 import { cardVariant, deckChanges } from './cards.mjs';
 import { present } from './present.mjs';
 import { decisionKind, choiceView, decisionView } from './decision.mjs';
 import { isSettledObservation, observationKey, observationBoundary } from './spectator.mjs';
+export * from 'godot-stagehand';
 export { present } from './present.mjs';
-
-const { connect } = await import(createRequire(import.meta.url).resolve('godot-stagehand'));
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 class DecisionTimeoutError extends Error {}
@@ -60,7 +59,7 @@ export const sts2Wrappers = {
   },
 };
 
-export async function connectSts2(url, options = {}) {
+export async function connectSts2({ url = 'http://localhost:27120', ...options } = {}) {
   const client =
     options.client ??
     (await connect(url, {
@@ -650,7 +649,7 @@ export class Sts2 {
     this.client.close();
   }
   async screenshot() {
-    return (await this.client.builtin('Screen')).capture();
+    return (await this.client.root('Screen')).capture();
   }
 
   async waitFor(predicate, { timeoutMs = 30_000, signal } = {}) {

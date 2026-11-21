@@ -30,13 +30,19 @@ test('gameplay navigation submits semantic operations through a client without O
   await game.returnToMenu();
   await game.startRun({ character: 'REGENT', timeoutMs: 2000 });
 
-  assert.deepEqual(calls.map((call) => call.method), Array(4).fill(['operate', 'operation']).flat());
-  assert.deepEqual(calls.filter((call) => call.method === 'operate').map((call) => call.args), [
-    { kind: 'travel', room: { ref: 'room' }, humanDelayMs: 400, autoSkipDialogue: false },
-    { kind: 'openShop', humanDelayMs: 400, autoSkipDialogue: false },
-    { kind: 'returnToMenu', humanDelayMs: 400, autoSkipDialogue: false },
-    { kind: 'startRun', character: 'REGENT', humanDelayMs: 400, autoSkipDialogue: false },
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    Array(4).fill(['operate', 'operation']).flat(),
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.method === 'operate').map((call) => call.args),
+    [
+      { kind: 'travel', room: { ref: 'room' }, humanDelayMs: 400, autoSkipDialogue: false },
+      { kind: 'openShop', humanDelayMs: 400, autoSkipDialogue: false },
+      { kind: 'returnToMenu', humanDelayMs: 400, autoSkipDialogue: false },
+      { kind: 'startRun', character: 'REGENT', humanDelayMs: 400, autoSkipDialogue: false },
+    ],
+  );
   assert.deepEqual(waits, [180_000, 180_000, 180_000, 2000]);
 });
 
@@ -76,7 +82,9 @@ test('explicit shop entry uses the shared native service without Object', async 
         },
       };
     },
-    async subscribe() { return async () => {}; },
+    async subscribe() {
+      return async () => {};
+    },
     async browse(owner) {
       assert.equal(owner, 'merchant');
       calls.push(owner);
@@ -811,7 +819,12 @@ test('explicit menu navigation does not reveal pending epochs', async () => {
           text: [],
           choices: [],
           timeline: inTimeline ? { busy: false } : null,
-          navigation: { atMainMenu: !inTimeline, canReturnToMenu: true, menuTop: inTimeline ? 'timeline' : null, menuDepth: 1 },
+          navigation: {
+            atMainMenu: !inTimeline,
+            canReturnToMenu: true,
+            menuTop: inTimeline ? 'timeline' : null,
+            menuDepth: 1,
+          },
         },
       };
     },
@@ -1004,7 +1017,9 @@ test('startRun follows the native Standard button after the first run', async ()
       screen: 'NGame',
       ready: true,
       text: [],
-      choices: [button('singleplayer', 'NMainMenuTextButton', 'Solo', { menuAction: 'singleplayer' })],
+      choices: [
+        button('singleplayer', 'NMainMenuTextButton', 'Solo', { menuAction: 'singleplayer' }),
+      ],
     },
     (id, update) => {
       if (id === 'singleplayer')
@@ -1013,7 +1028,9 @@ test('startRun follows the native Standard button after the first run', async ()
           ready: true,
           text: [],
           choices: [
-            button('standard', 'NSubmenuButton', 'Localized standard title', { menuAction: 'standard' }),
+            button('standard', 'NSubmenuButton', 'Localized standard title', {
+              menuAction: 'standard',
+            }),
             button('custom', 'NSubmenuButton', 'Localized custom title'),
           ],
         });

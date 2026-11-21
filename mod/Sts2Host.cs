@@ -91,10 +91,10 @@ public sealed class Sts2Host
             () => (long)Time.GetTicksMsec());
     }
 
-    public static void Install(Node bridge, SceneTree tree)
+    public static Sts2Host Install(Node bridge, SceneTree tree)
     {
         var host = new Sts2Host(bridge, tree);
-        var node = GD.Load<GDScript>("res://stagehand_sts2/sts2.gd").New().As<Node>();
+        var node = GD.Load<GDScript>("res://RuntimeControl/sts2.gd").New().As<Node>();
         node.Name = "Sts2";
         node.Set("read_callback", Callable.From(host.Read));
         node.Set("request_callback", Callable.From<string, string>(host.Request));
@@ -106,6 +106,17 @@ public sealed class Sts2Host
         var handle = node.Call("configure", bridge);
         if (handle.VariantType != Variant.Type.String || string.IsNullOrEmpty(handle.AsString()))
             throw new InvalidOperationException("The Sts2 endpoint could not be registered");
+
+        return host;
+    }
+
+    internal bool ActionInProgress
+    {
+        get
+        {
+            UpdatePending();
+            return _workflows.Busy || !Idle || _pending?.Status is "accepted" or "running" or "choice_required";
+        }
     }
 
     private static string Serialize(object value) => JsonSerializer.Serialize(value, Json);
@@ -766,11 +777,23 @@ public sealed class Sts2Host
         };
     }
 
+    private static bool IsAdministrationType(Type type) =>
+        type.Namespace?.StartsWith("MegaCrit.Sts2.Core.Nodes.Screens.Settings", StringComparison.Ordinal) == true;
+
+    private static bool IsAdministration(Node node)
+    {
+        for (Node? owner = node; owner != null; owner = owner.GetParent())
+            if (IsAdministrationType(owner.GetType()))
+                return true;
+
+        return false;
+    }
+
     private (List<Control> Controls, object[] Choices) ReadChoices(Node scope, bool isUnlock, HashSet<Control> skippedRewards, bool ancientChat)
     {
         var controls = Walk(scope).OfType<Control>().Where(c =>
         {
-            if (!GodotObject.IsInstanceValid(c))
+            if (!GodotObject.IsInstanceValid(c) || IsAdministration(c))
                 return false;
 
             var offered = Visible(c) && (scope is MegaCrit.Sts2.Core.Nodes.Screens.NRewardsScreen && Get(c, "Reward") != null
@@ -1170,7 +1193,8 @@ public sealed class Sts2Host
         Commit = release?.Commit,
         Branch = release?.Branch,
         Date = release?.Date,
-        MainAssemblyHash = release?.MainAssemblyHash
+        MainAssemblyHash = release?.MainAssemblyHash,
+        Mod = Entry.Information
     };
 
     public string Request(string json)
@@ -1273,7 +1297,7 @@ public sealed class Sts2Host
             return;
         }
         var control = ResolveNode(choice["ref"]!.GetValue<string>());
-        if (control is not Control visible || !Visible(visible) || control is NClickableControl { IsEnabled: false })
+        if (IsAdministration(control) || control is not Control visible || !Visible(visible) || control is NClickableControl { IsEnabled: false })
             throw new WorkflowService.ActivationRejected("Choice is no longer enabled and visible");
 
         var name = control is NCharacterSelectButton ? "Select" : "ForceClick";

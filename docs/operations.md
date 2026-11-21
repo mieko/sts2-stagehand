@@ -1,10 +1,11 @@
 # Service operations
 
 The `Sts2` endpoint executes ordered plans, selections, purchases and rewards in
-the game. Any WebSocket client can submit the same plans and read their results.
+the game. Use the WebSocket at `/rpc` on the Stagehand base address to submit
+plans and read their results.
 The [JavaScript API](api.md) adds a local queue, completion waits, presentation
-and deck comparisons. The same authenticated connection can also access the
-[developer endpoints](security.md).
+and deck comparisons. The connection also provides the
+[developer endpoints](security.md) when Developer Mode is enabled.
 
 Discover the registered `Sts2` object through Stagehand. `operate` submits work;
 `operation` reads its receipt. Both use ordinary `object.call`, alongside native

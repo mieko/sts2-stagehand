@@ -1,44 +1,41 @@
 # Security
 
-**Anyone who can authenticate to the running mod can execute arbitrary GDScript
-in the Slay the Spire 2 process.** Connecting is like attaching DevTools to a
-browser tab. It gives a trusted developer an interactive console and access to
-live objects. The wire protocol is Stagehand's JSON-RPC over WebSocket.
+Normal mode exposes **Registry** and **Sts2**: discovery, player-visible game facts
+and native gameplay actions. A connected client can play cards, spend resources,
+change progress, start runs and abandon them. This is control of your game, not a
+read-only connection. Spectators use the same credentials and can submit actions too.
 
-## Gameplay and debugger access
+## Developer Mode
 
-The `Sts2` endpoint reports player-visible information and submits native game
-actions. For example, its draw pile reports the cards still in the pile with
-their order unknown. This view is useful for testing and playing under the
-same information constraints as a human.
+**Developer Mode lets connected clients execute arbitrary code on this computer.**
+It adds Script, Object, PropertyRecorder, SceneTree, Runtime, Screen and Input.
+Treat it like an attached DevTools console. Scripts and method calls can inspect
+hidden game state, change a run, read or write files and launch programs with the
+game process's permissions. The gameplay API's information limits do not restrict
+a debugger client. Enable Developer Mode only for clients you trust with that access.
 
-The mod also enables `Script`, `Object` and `PropertyRecorder` by default.
-`Script` evaluates supplied GDScript, `Object` can change properties and call
-methods on game objects, and recorder getters can execute game code. A client
-with the session token can call these directly regardless of which JavaScript
-wrapper it uses. A spectator uses the same credentials and can switch to the
-debugger at any time. A script can inspect hidden state, change a run, read or write files
-and launch programs wherever the game process has permission. The gameplay
-view offers no anti-cheat protection against such a client.
+## Connections
 
-## Connection and profile
+The listener rejects WebSocket upgrades with an `Origin` header, including
+ordinary browser connections. Discovery, documentation and the JavaScript
+download are available without a token. RPC uses the WebSocket at `/rpc`.
+By default, any local tool can use the exposed API on the `localhost` listener.
+Enable **Require Access Token** to limit the API to clients with the key.
 
-The mod starts its listener only when `STAGEHAND_TOKEN` is nonempty. The launcher
-generates a new token, writes it to the instance's private `session.json` and starts
-the mod on an available loopback port. Keep that file private. Loopback controls
-which machines can reach the listener, and the token controls who can connect.
-Neither restricts what an authenticated script can do.
+**Copy** beside **Connection Details** and `RuntimeControl/connection.json`
+include the active token when required. A key entered in **Access Token** is
+stored in `RuntimeControl/settings.json`.
+Share credentials only with intended clients. The generated token changes each launch.
 
-The separate app, Steam-off launch and custom profile keep ordinary saves and
-progress separate from Steam play. Scripts can still access other files permitted
-by the OS. Plain `ws://` carries the token and traffic unencrypted. If a trusted
-client connects from another machine, use an encrypted tunnel to the loopback
-listener.
+Allow Remote Connections permits exposing the listener beyond loopback and
+requires authentication. Plain `http://` discovery and `ws://` RPC traffic,
+including the token, are unencrypted. Use a trusted network or encrypted
+tunnel; this mod does not provide TLS. A separate save profile protects ordinary
+play from accidental game actions, not from arbitrary code's filesystem access.
 
-## Timeouts and changes
+## Completion and timeouts
 
-Scripts run on the game thread. A blocking script can freeze the game, including
-the listener. Client timeouts cannot interrupt it or roll back changes. Accepted
-game operations can also continue after a timeout or disconnect. Inspect the
-current state and the last operation receipt before issuing more input. Never
-automatically replay an uncertain action. See [operation recovery](api.md#queue-and-completion-contract).
+Scripts execute on the main thread. A blocking script can freeze the game and
+listener; timeouts cannot interrupt it or roll back changes. Accepted gameplay
+work may continue after a timeout or disconnect. Inspect `recover()` and fresh
+state before submitting more input. Never automatically replay an uncertain action.

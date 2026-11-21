@@ -3,17 +3,31 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "ws": "8.23.0",
-    "godot-stagehand": "file:./stagehand"
+    "godot-stagehand": "file:./stagehand",
+    "ws": "8.23.0"
   },
   "exports": "./client/sts2.mjs",
   "scripts": {
-    "test": "npm run test:workflows && node --test test/*.test.mjs && npm run test:launcher",
+    "test": "npm run test:settings && npm run test:workflows && node --test test/*.test.mjs",
     "test:presentation": "node --test test/presentation.test.mjs",
     "test:host": "dotnet run --project test/PublicCardList.test.csproj",
     "test:selection": "dotnet run --project test/SelectionNative.test.csproj",
-    "test:launcher": "python3 -m unittest discover -s test -p '*_test.py'",
+    "test:launcher": "node --test test/launcher.test.mjs",
     "test:workflows": "dotnet run --project test/Workflow.test.csproj && dotnet build test/WorkflowBridge.test.csproj --output test/bin/WorkflowBridge --verbosity quiet",
-    "test:registration": "python3 test/registration.py"
+    "test:registration": "node test/registration.mjs",
+    "build": "node tools/build.mjs",
+    "package": "node tools/package.mjs",
+    "format:check": "prettier --check \"client/**/*.mjs\" \"tools/**/*.mjs\" \"test/**/*.mjs\" \"docs/**/*.md\" README.md package.json",
+    "test:settings": "dotnet run --project test/Settings.test.csproj"
+  },
+  "devDependencies": {
+    "@zip.js/zip.js": "2.25.0",
+    "esbuild": "0.28.2",
+    "prettier": "3.10.1"
+  },
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
   }
 }

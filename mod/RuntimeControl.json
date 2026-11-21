@@ -1,11 +1,11 @@
 {
   "id": "RuntimeControl",
   "name": "Stagehand for StS2",
-  "author": "Mike",
-  "description": "Stagehand runtime inspection and semantic StS2 control.",
-  "version": "0.1.0",
+  "author": "mieko",
+  "description": "Remote single-player control and inspection over Stagehand.",
   "has_pck": true,
   "has_dll": true,
   "dependencies": [],
-  "affects_gameplay": true
+  "affects_gameplay": true,
+  "min_game_version": "0.111.1"
 }
