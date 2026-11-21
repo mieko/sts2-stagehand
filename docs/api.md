@@ -24,10 +24,11 @@ var result = await game.playCards([{ card: 'Strike', target: d.combat.enemies[0]
   endTurn: true,
 });
 console.log(game.present(result));
+var choices = result.decision.choices;
 ```
 
-Every successful mutation returns its resulting `decision`; inspect it before
-continuing. Batches stop at new choices or failures and retain applied progress.
+Gameplay actions return an outcome. Inspect `result.decision` before continuing.
+Batches stop at new choices or failures and retain applied progress.
 **Do not replay a whole batch after interruption.** See [recovery](#queue-and-completion-contract).
 
 ## Observe and identify
